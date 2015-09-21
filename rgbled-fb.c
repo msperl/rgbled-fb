@@ -68,7 +68,7 @@ static void rgbled_imageblit(struct fb_info *info,
 	rgbled_schedule(info);
 }
 
-int rgbled_getPixelCoords_generic(
+void rgbled_getPixelCoords_generic(
 	struct rgbled_fb *rfb,
 	struct rgbled_board_info *board,
 	int board_pixel_num,
@@ -77,8 +77,8 @@ int rgbled_getPixelCoords_generic(
 	int x, y;
 
 	if (board->layout_yx) {
-		x = board_pixel_num % board->height;
-		y = board_pixel_num / board->height;
+		y = board_pixel_num % board->height;
+		x = board_pixel_num / board->height;
 
 	} else {
 		x = board_pixel_num % board->width;
@@ -93,8 +93,6 @@ int rgbled_getPixelCoords_generic(
 
 	coord->x = x;
 	coord->y = y;
-
-	return 0;
 }
 
 void rgbled_getPixelCoords_linear(
@@ -108,7 +106,6 @@ void rgbled_getPixelCoords_linear(
 	coord->x += board->x;
 	coord->y += board->y;
 }
-
 EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_linear);
 
 void rgbled_getPixelCoords_winding(
@@ -121,29 +118,35 @@ void rgbled_getPixelCoords_winding(
 
 	/* handle layout */
 	if (board->layout_yx) {
-		if (coord->x & 1) {
-			coord->y = board->y + board->height - 1 - coord->y;
-		} else {
-			coord->y = board->y + coord->y;
-		}
-		coord->x += board->x;
+		if (coord->x & 1)
+			coord->y = board->height - 1 - coord->y;
 	} else {
-		if (coord->y & 1) {
-			coord->x = board->x + board->width - 1 - coord->x;
-		} else {
-			coord->x = board->x + coord->x;
-		}
+		if (coord->y & 1)
+			coord->x = board->width - 1 - coord->x;
 		coord->y += board->y;
 	}
+
+	coord->x += board->x;
+	coord->y += board->y;
 }
 EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_winding);
+
+static inline void rgbled_getPixelValue_set(struct rgbled_pixel *pix,
+					    u8 r, u8 g, u8 b, u8 bright)
+{
+	pix->red = r;
+	pix->green = g;
+	pix->blue = b;
+	pix->brightness = bright;
+}
 
 static void rgbled_getPixelValue(struct rgbled_fb *rfb,
 				 struct rgbled_board_info *board,
 				 struct rgbled_coordinates *coord,
 				 struct rgbled_pixel *pix)
 {
-	struct rgbled_pixel *pix_array = (struct rgbled_pixel *)rfb->vmem;
+	struct rgbled_pixel *vpix_array = (struct rgbled_pixel *)rfb->vmem;
+	struct rgbled_pixel *vpix;
 
 	/* get the pixel Value */
 	if (board->getPixelValue) {
@@ -154,13 +157,17 @@ static void rgbled_getPixelValue(struct rgbled_fb *rfb,
 	}
 
 	/* the default implementation */
-
 	if (coord->x > rfb->width)
-		return;
-	if (coord->y < rfb->height)
-		return;
+		return 	rgbled_getPixelValue_set(pix, 0, 0, 0, 0);
+	if (coord->y > rfb->height)
+		return 	rgbled_getPixelValue_set(pix, 0, 0, 0, 0);
 
-	*pix = pix_array[coord->y * rfb->width + coord->x];
+	/* copy pixel data */
+	vpix = &vpix_array[coord->y * rfb->width + coord->x];
+
+	rgbled_getPixelValue_set(pix, vpix->red, vpix->green, vpix->blue,
+				 vpix->brightness);
+
 }
 
 static void rgbled_handle_board(struct rgbled_fb *rfb,
