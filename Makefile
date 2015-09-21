@@ -1,4 +1,4 @@
-obj-m := rgbled-fb.o ws2812b-spi-fb.o
+obj-m := rgbled-fb.o ws2812b-spi-fb.o apa102-spi-fb.o
 KDIR := /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
 

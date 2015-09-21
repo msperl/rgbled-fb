@@ -44,7 +44,9 @@ struct rgbled_board_info {
 	u32	width;
 	u32	height;
 	u32	pixel;
+
 	u32	pitch;
+
 	bool	layout_yx;
 	bool	inverted_x;
 	bool	inverted_y;
@@ -71,6 +73,9 @@ struct rgbled_fb {
 	int height;
 	int vmem_size;
 	int pixel;
+
+	void (*deferred_work)(struct rgbled_fb*);
+	void *par;
 };
 
 /* typical pixel handler */
@@ -85,10 +90,9 @@ extern int rgbled_getPixelValue_winding(
 	struct rgbled_pixel *pix);
 
 
-extern struct rgbled_fb *rgbled_alloc(struct device *dev, const char *name);
+extern struct rgbled_fb *rgbled_alloc(struct device *dev);
 extern int rgbled_scan_boards(struct rgbled_fb *fb,
 			      struct rgbled_board_info *boards);
-extern int rgbled_register(struct rgbled_fb *fb);
-extern int rgbled_release(struct rgbled_fb *fb);
+extern int rgbled_register(struct rgbled_fb *fb, const char *name);
 
 #endif /* __RGBLED_FB_H */

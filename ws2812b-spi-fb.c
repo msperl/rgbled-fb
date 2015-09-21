@@ -4,13 +4,15 @@
  *  (c) Martin Sperl <kernel@martin.sperl.org>
  *
  *  Frame buffer code for WS2812B LED strip/Panel using
- *  SPI-MOSI transfer only.
+ *  SPI-MOSI transfer only encoding clock in MOSI ignoring
+ *  SPI-SCK (just used to push the bits at the correct rate).
+ *
  *  Typically setup via a 74HCT125 for level translation to 5V
  *  where:
- *    CS is connected to 1/OE
- *    MOSI is connected to 1A
- *    WS2812B DI is connected to 1Y
- *  (or any other of the Buffers)
+ *    SPI-CS    is connected to 1/OE
+ *    SPI-MOSI  is connected to 1A
+ *    WS2812-DI is connected to 1Y
+ *  (or any other of the buffers on the 74HCT125)
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -34,14 +36,6 @@
 #include "rgbled-fb.h"
 
 #define DEVICE_NAME "ws2812b-spi-fb"
-
-struct ws2812b_data {
-	struct spi_device *spi;
-	struct rgbled_fb *rgbled_fb;
-	struct ws2812b_pixel *spi_data;
-	struct spi_message spi_msg;
-	struct spi_transfer spi_xfer;
-};
 
 /* encoded byte
  * we present each bit as 3 bits (oversampling by a factor of 3)
@@ -90,7 +84,13 @@ struct ws2812b_pixel {
 	struct ws2812b_encoding g, r, b;
 };
 
-
+struct ws2812b_data {
+	struct spi_device *spi;
+	struct rgbled_fb *rgbled_fb;
+	struct ws2812b_pixel *spi_data;
+	struct spi_message spi_msg;
+	struct spi_transfer spi_xfer;
+};
 
 /* define the different FB types */
 struct rgbled_board_info ws2812b_boards[] = {
@@ -171,6 +171,11 @@ struct rgbled_board_info ws2812b_boards[] = {
 	{ }
 };
 
+static void ws2812b_deferred_work(struct rgbled_fb *rfb) {
+	struct ws2812b_data *bs=rfb->par;
+	fb_info(rfb->info, "Update led screen:\n");
+}
+
 static int ws2812b_probe(struct spi_device *spi)
 {
 	struct ws2812b_data *bs;
@@ -181,24 +186,20 @@ static int ws2812b_probe(struct spi_device *spi)
 	if (!bs)
 		return -ENOMEM;
 
-	bs->rgbled_fb = rgbled_alloc(&spi->dev, DEVICE_NAME);
-	if (!bs->rgbled_fb) {
-		err = -ENOMEM;
-		goto err;
-	}
+	bs->rgbled_fb = rgbled_alloc(&spi->dev);
+	if (!bs->rgbled_fb)
+		return -ENOMEM;
 	/* scan boards to get string size */
 	err = rgbled_scan_boards(bs->rgbled_fb, ws2812b_boards);
 	if (err)
-		goto err;
+		return err;
 
 	/* set up the spi-message and buffers */
 	len = bs->rgbled_fb->pixel * sizeof(struct ws2812b_pixel)
 		+ 15;
 	bs->spi_data = devm_kzalloc(&spi->dev, len, GFP_KERNEL);
-	if (!bs->spi_data) {
-		err = -ENOMEM;
-		goto err;
-	}
+	if (!bs->spi_data)
+		return -ENOMEM;
 
 	bs->spi = spi;
 	spi_message_init(&bs->spi_msg);
@@ -206,24 +207,10 @@ static int ws2812b_probe(struct spi_device *spi)
 	bs->spi_xfer.tx_buf = bs->spi_data;
 	spi_message_add_tail(&bs->spi_xfer, &bs->spi_msg);
 
-	err = rgbled_register(bs->rgbled_fb);
-	if (err)
-		return err;
+	bs->rgbled_fb->deferred_work = ws2812b_deferred_work;
+	bs->rgbled_fb->par = bs;
 
-	dev_set_drvdata(&spi->dev, bs);
-
-	return 0;
-
-err:
-	rgbled_release(bs->rgbled_fb);
-	return err;
-}
-
-static int ws2812b_remove(struct spi_device *spi)
-{
-	struct ws2812b_data *bs = dev_get_drvdata(&spi->dev);
-
-	return rgbled_release(bs->rgbled_fb);
+	return rgbled_register(bs->rgbled_fb, DEVICE_NAME);
 }
 
 static const struct of_device_id ws2812b_of_match[] = {
@@ -241,7 +228,6 @@ static struct spi_driver ws2812b_driver = {
                 .of_match_table = ws2812b_of_match,
         },
         .probe = ws2812b_probe,
-        .remove = ws2812b_remove,
 };
 module_spi_driver(ws2812b_driver);
 

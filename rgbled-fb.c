@@ -20,6 +20,7 @@
  *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <linux/device.h>
 #include <linux/fb.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -32,8 +33,7 @@
 
 static void rgbled_schedule(struct fb_info *info)
 {
-        schedule_delayed_work(&info->deferred_work,
-			      info->fbdefio->delay);
+        schedule_delayed_work(&info->deferred_work, 1);
 }
 
 static ssize_t rgbled_write(struct fb_info *info,
@@ -89,7 +89,10 @@ EXPORT_SYMBOL_GPL(rgbled_getPixelValue_winding);
 void rgbled_deferred_io(struct fb_info *fb,
 			struct list_head *pagelist)
 {
-	fb_info(fb, "Update led screen: %s\n", fb->fix.id);
+	struct rgbled_fb *rfb = fb->par;
+
+	if (rfb->deferred_work)
+		rfb->deferred_work(rfb);
 }
 
 static struct fb_ops rgbled_ops = {
@@ -124,7 +127,7 @@ static struct fb_var_screeninfo fb_var_screeninfo_default = {
 	  .width		= width * xscale;
 	  .height		= width * yscale;
 	*/
-	.bits_per_pixel  = sizeof(struct rgbled_pixel),
+	.bits_per_pixel  = 8 * sizeof(struct rgbled_pixel),
 #define OFFSETS(name) {						\
 		8 * offsetof(struct rgbled_pixel, name),	\
 		8 * sizeof((((struct rgbled_pixel *)0)->name)),	\
@@ -140,68 +143,229 @@ static struct fb_deferred_io fb_deferred_io_default = {
 	.deferred_io	= rgbled_deferred_io,
 };
 
-struct rgbled_fb *rgbled_alloc(struct device *dev, const char *name)
+static inline struct rgbled_board_info *to_board_info(
+	struct list_head *list)
 {
-	struct fb_info *fb;
-	struct rgbled_fb *rfb;
-
-	/* allocate framebuffer */
-	fb = framebuffer_alloc(sizeof(struct rgbled_fb), dev);
-	if (!fb)
-		return NULL;
-	rfb = fb->par;
-	rfb->info = fb;
-
-	/* first copy the defaults */
-	memcpy(&rfb->deferred_io,
-	       &fb_deferred_io_default,
-	       sizeof(fb_deferred_io_default));
-	memcpy(&fb->fix.id,
-	       name,
-	       sizeof(fb->fix.id)-1);
-
-	/* now set up specific things */
-	INIT_LIST_HEAD(&rfb->boards);
-	fb->fbops	= &rgbled_ops;
-	fb->flags	= FBINFO_FLAG_DEFAULT | FBINFO_VIRTFB;
-
-	return rfb;
+	return list ? container_of(list, struct rgbled_board_info, list) :
+		NULL;
 }
-EXPORT_SYMBOL_GPL(rgbled_alloc);
+
+static int rgbled_board_info_cmp(void *priv,
+			   struct list_head *a,
+			   struct list_head *b)
+{
+	struct rgbled_fb *rfb = priv;
+	struct rgbled_board_info *ad = to_board_info(a);
+	struct rgbled_board_info *bd = to_board_info(b);
+
+	if (ad->id < bd->id)
+		return -1;
+	if (ad->id > bd->id)
+		return +1;
+
+	/* there should be no identical IDs, so mark as duplicates */
+	rfb->duplicate_id = 1;
+	return 0;
+}
+
+static int rgbled_probe_of_board(struct rgbled_fb *rfb,
+				struct device_node *nc,
+				struct rgbled_board_info *board)
+{
+	struct device *dev = rfb->info->device;
+	struct rgbled_board_info *bi;
+
+	bi = devm_kzalloc(dev, sizeof(*bi), GFP_KERNEL);
+	if (!bi)
+		return -ENOMEM;
+
+	/* copy the default board data */
+	memcpy(bi, board, sizeof(*bi));
+
+	/* add to list */
+	list_add(&bi->list, &rfb->boards);
+
+	/* now fill in from the device tree the overrides */
+	if (of_property_read_u32_index(nc, "reg",    0, &bi->id))
+		return -EINVAL;
+	of_property_read_u32_index(nc, "x",      0, &bi->x);
+	of_property_read_u32_index(nc, "y",      0, &bi->y);
+	of_property_read_u32_index(nc, "width",  0, &bi->width);
+	of_property_read_u32_index(nc, "height", 0, &bi->height);
+
+	/* calculate size of this */
+	bi->pixel = bi->width * bi->height;
+	rfb->pixel += bi->pixel;
+	if (!bi->pixel)
+		return -EINVAL;
+
+	/* setting max coordinates */
+	if (rfb->width < bi->x + bi->width)
+		rfb->width = bi->x + bi->width;
+	if (rfb->height < bi->x + bi->height)
+		rfb->height = bi->y + bi->height;
+
+	return 0;
+}
+
+int rgbled_scan_boards_match(struct rgbled_fb *rfb,
+			     struct device_node *nc,
+			     struct rgbled_board_info *boards)
+{
+	struct device *dev = rfb->info->device;
+	const char *name[6];
+	int i;
+	int err;
+	int idx;
+
+	/* get the compatible property */
+	for(i=0;i<6;i++)
+		name[i]=NULL;
+	err = of_property_read_string_helper(nc, "compatible", (const char **)&name, 6, 0);
+	dev_err(dev, "Check node: %s - %i - %s\n",
+		nc->full_name, err, name[0]);
+
+	for(i = 0 ; boards[i].compatible ; i++) {
+		dev_err(dev, "Check node: %i %s\n", i, boards[i].compatible);
+		idx = of_property_match_string(nc, "compatible",
+					boards[i].compatible);
+		if (idx >= 0) {
+			dev_err(dev, "match\n");
+			return rgbled_probe_of_board(rfb, nc,
+						     &boards[i]);
+		}
+	}
+
+	/* not matching */
+	dev_err(dev, "Incompatible node %s found\n", nc->full_name);
+	return -EINVAL;
+}
 
 int rgbled_scan_boards(struct rgbled_fb *rfb,
 		       struct rgbled_board_info *boards)
 {
-	rfb->width = 32;
-	rfb->height = 24;
+	struct device *dev = rfb->info->device;
+	struct device_node *nc;
+	int err;
+
+	/* iterate over all entries in the device-tree */
+	for_each_available_child_of_node(dev->of_node, nc) {
+		err = rgbled_scan_boards_match(rfb, nc, boards) ;
+		if (err)
+			return err;
+	}
+
+	/* sort list - used to shift out the data
+	 * this also checks that there are no duplicate ids...
+	 */
+	list_sort(rfb, &rfb->boards, rgbled_board_info_cmp);
+
+	/* if we got a duplicate, then fail */
+	if (rfb->duplicate_id) {
+			dev_err(dev, "duplicate\n");
+		return -EINVAL;
+	}
+
+	/* if we got no pixel, then fail */
+	if (!rfb->pixel) {
+		dev_err(dev, "nopixel\n");
+		return -EINVAL;
+	}
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(rgbled_scan_boards);
 
-int rgbled_register(struct rgbled_fb *rfb)
+static void rgbled_framebuffer_release(struct device *dev, void *res)
+{
+	struct rgbled_fb *rfb = *(struct rgbled_fb **)res;
+	framebuffer_release(rfb->info);
+	rfb->info = NULL;
+}
+
+struct rgbled_fb *rgbled_alloc(struct device *dev)
+{
+	struct fb_info *fb;
+	struct rgbled_fb *rfb;
+	struct rgbled_fb **ptr;
+
+	/* initialize our own structure */
+	rfb = devm_kzalloc(dev, sizeof(*rfb), GFP_KERNEL);
+
+	/* first copy the defaults */
+	memcpy(&rfb->deferred_io,
+	       &fb_deferred_io_default,
+	       sizeof(fb_deferred_io_default));
+
+	/* now set up specific things */
+	INIT_LIST_HEAD(&rfb->boards);
+
+	/* now allocate the framebuffer_info via devres */
+	ptr = devres_alloc(rgbled_framebuffer_release,
+			   sizeof(*ptr), GFP_KERNEL);
+	if (!ptr)
+		return NULL;
+	/* allocate framebuffer */
+	fb = framebuffer_alloc(0, dev);
+	if (!fb) {
+		devres_free(ptr);
+		return NULL;
+	}
+	*ptr = rfb;
+	devres_add(dev, ptr);
+
+	/* and add a pointer back and forth */
+	fb->par = rfb;
+	rfb->info = fb;
+
+	return rfb;
+}
+EXPORT_SYMBOL_GPL(rgbled_alloc);
+
+static void rgbled_unregister_framebuffer(struct device *dev, void *res)
+{
+	struct rgbled_fb *rfb = *(struct rgbled_fb **)res;
+
+	fb_deferred_io_cleanup(rfb->info);
+	vfree(rfb->vmem);
+	rfb->vmem = NULL;
+	unregister_framebuffer(rfb->info);
+}
+
+int rgbled_register(struct rgbled_fb *rfb, const char *name)
 {
 	struct fb_info *fb = rfb->info;
 	int err;
+	struct rgbled_fb **ptr;
+
+	/* prepare release */
+	ptr = devres_alloc(rgbled_unregister_framebuffer,
+			   sizeof(*ptr), GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+	*ptr = rfb;
 
 	/* set up basics */
+	strncpy(fb->fix.id, name, sizeof(fb->fix.id));
 	fb->fbops	= &rgbled_ops;
 	fb->fbdefio	= &rfb->deferred_io;
 	fb->fix		= fb_fix_screeninfo_default;
 	fb->var		= fb_var_screeninfo_default;
+	fb->flags	= FBINFO_FLAG_DEFAULT | FBINFO_VIRTFB;
 
 	/* set up sizes */
 	fb->var.xres_virtual = fb->var.xres = rfb->width;
 	fb->var.yres_virtual = fb->var.yres = rfb->height;
 
 	fb->fix.line_length = sizeof(struct rgbled_pixel) * rfb->width;
+	rfb->vmem_size = fb->fix.line_length * rfb->height;
 
-	rfb->pixel = rfb->width * rfb->height;
-	rfb->vmem_size = sizeof(struct rgbled_pixel) * rfb->pixel;
-
+	/* allocate memory */
 	rfb->vmem = vzalloc(rfb->vmem_size);
-	if (!rfb->vmem)
+	if (!rfb->vmem) {
+		devres_free(ptr);
 		return -ENOMEM;
+	}
 
 	/* set vmem data */
         fb->fix.smem_len = rfb->vmem_size;
@@ -212,177 +376,29 @@ int rgbled_register(struct rgbled_fb *rfb)
 
 	/* calculate refresh rate to use */
 	if (!rfb->deferred_io.delay)
-		rfb->deferred_io.delay = HZ/10;
+		rfb->deferred_io.delay = HZ/100;
 
-	/* initialize deferred io */
+	/* initialize deferred io as a devm device */
 	fb_deferred_io_init(fb);
 
 	/* register fb */
 	err = register_framebuffer(fb);
 	if (err) {
 		vfree(rfb->vmem);
-		rfb->vmem = NULL;
+		devres_free(ptr);
+		return err;
 	}
+	/* now register resource cleanup */
+	devres_add(fb->device, ptr);
 
-	fb_info(fb, "Registered led-framebuffer of size %u x %u for %s\n",
-		rfb->width, rfb->height, fb->fix.id);
+	strncpy(fb->fix.id, name, sizeof(fb->fix.id));
+	fb_info(fb,
+		"rgbled-fb of size %ux%u with %i led of type %s - %s\n",
+		rfb->width, rfb->height, rfb->pixel, fb->fix.id, name);
 
-	return err;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(rgbled_register);
-
-int rgbled_release(struct rgbled_fb *rfb)
-{
-	vfree(rfb->vmem);
-	rfb->vmem = NULL;
-
-	framebuffer_release(rfb->info);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(rgbled_release);
-
-#if 0
-
-static inline struct ws2812b_board_data *to_board_data(
-	struct list_head *list)
-{
-	return list ? container_of(list, struct ws2812b_board_data, list) :
-		NULL;
-}
-
-static int ws2812b_probe_of_board(struct ws2812b_data *bs,
-	struct spi_device *spi, struct device_node *nc)
-{
-	struct ws2812b_board_data *bd;
-
-	bd = devm_kzalloc(&spi->dev, sizeof(*bd), GFP_KERNEL);
-	if (!bd)
-		return -ENOMEM;
-
-	/* add to list */
-	list_add(&bd->list, &bs->boards);
-
-	/* set some defaults */
-	bd->height = 1;
-
-	/* now fill in from the device tree */
-	of_property_read_u32_index(nc, "id",     0, &bd->id);
-	of_property_read_u32_index(nc, "x",      0, &bd->x);
-	of_property_read_u32_index(nc, "y",      0, &bd->y);
-	of_property_read_u32_index(nc, "width",  0, &bd->width);
-	of_property_read_u32_index(nc, "height", 0, &bd->height);
-	of_property_read_u32_index(nc, "flags",  0, &bd->flags);
-	of_property_read_string   (nc, "name",      &bd->name);
-
-	/* some sanity checks */
-	if (!bd->width)
-		return -EINVAL;
-	if (!bd->height)
-		return -EINVAL;
-
-	/* setting max coordinates */
-	if (bs->fb.var.xres < bd->x + bd->width)
-		bs->fb.var.x =
-			bs->fb.var.xres_virtual =
-			bd->x + bd->width;
-	if (bs-fb.var.yres < bd->y + bd->height)
-		bs->fb.var.yres =
-			bs->fb.var.yres_virtual =
-			bd->y + bd->height;
-
-	return 0;
-}
-
-int ws2812b_board_data_cmp(void *priv,
-			   struct list_head *a,
-			   struct list_head *b)
-{
-	struct ws2812b_data *bs = priv;
-	struct ws2812b_board_data *ad = to_board_data(a);
-	struct ws2812b_board_data *bd = to_board_data(b);
-
-	if (ad->id < bd->id)
-		return -1;
-	if (ad->id > bd->id)
-		return +1;
-
-	/* there should be no identical IDs */
-	bs->duplicate = 1;
-	return 0;
-}
-
-int ws2812b_probe(struct spi_device *spi)
-{
-	struct ws2812b_data *bs;
-	struct device_node *nc;
-	u32 len;
-	int err;
-
-	/* allocate private structures */
-	bs = devm_kzalloc(&spi->dev, sizeof(*bs), GFP_KERNEL);
-	if (!bs)
-		return -ENOMEM;
-	/* set the driver data */
-	dev_set_drvdata(&spi->dev, bs);
-
-	/* fill in framebuffer data with static data */
-	memcpy(bs->fb,
-	       ws2812b_fb_info_default,
-	       sizeof(ws2812b_fb_info_default));
-
-
-	/* and initialize */
-	INIT_LIST_HEAD(&bs->boards);
-
-	/* iterate over all entries in the device-tree */
-	for_each_available_child_of_node(spi->dev.of_node, nc) {
-		err = ws2812b_probe_of_board(bs, spi, nc);
-		if (err)
-			return err;
-	}
-
-	/* sort list - used to shift out the data */
-	list_sort(bs, &bs->boards, ws2812b_board_data_cmp);
-
-	/* if we got a duplicate, then fail */
-	if (bs->duplicate)
-		return -EINVAL;
-
-	/* allocate spi-pixel-buffer */
-	len = 3 /* colors */
-		* 3 /* bytes per color - encoding */
-		* bs->pixel /* pixel in loop */
-		+ 15 /* Reset low for 50us @2.4MHz */;
-
-	bs->spi_buffer = devm_kzalloc(&spi->dev, len,GFP_KERNEL);
-	if (!bs->spi_buffer)
-		return -ENOMEM;
-
-	/* setup spi message */
-	spi_message_init(&bs->msg);
-	bs->xfer.len = len;
-	bs->xfer.tx_buf = bs->spi_buffer;
-	spi_message_add_tail(&bs->xfer, &bs->msg);
-
-
-	/* allocate framebuffer as the final step*/
-	info = framebuffer_alloc(0, &spi->dev);
-	if (!info)
-		return -ENOMEM;
-
-
-	return err;
-
-
-
-	/* register the led-devices */
-	err = ws2812b_register_leds(bs, spi);
-
-	return err;
-}
-
-#endif
 
 MODULE_AUTHOR("Martin Sperl <kernel@martin.sperl.org>");
 MODULE_DESCRIPTION("generic RGB LED FB infrastructure");
