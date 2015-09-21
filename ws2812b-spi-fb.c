@@ -104,9 +104,9 @@ static const struct of_device_id ws2812b_of_match[];
 /* implementation details */
 static inline void ws2812b_setEncodedPixel(struct ws2812b_encoding *enc, u8 val)
 {
-	enc->h = byte2encoding_h[(val >> 5) & 7];
-	enc->m = byte2encoding_m[(val >> 3) & 3];
-	enc->l = byte2encoding_l[(val >> 0) & 7];
+	enc->h = byte2encoding_h[(val >> 5) & 0x07];
+	enc->m = byte2encoding_m[(val >> 3) & 0x03];
+	enc->l = byte2encoding_l[(val >> 0) & 0x07];
 }
 
 static void ws2812b_setPixelValue(struct rgbled_fb *rfb,
@@ -265,7 +265,9 @@ static struct rgbled_board_info ws2812b_boards[] = {
 		.compatible	= "adafruit,neopixel,matrix,32x8",
 		.width		= 32,
 		.height		= 8,
+		.pixel		= 256,
 		.getPixelCoords	= rgbled_getPixelCoords_winding,
+		.layout_yx	= true,
 		.pitch		= 112,
 	},
 	{
@@ -282,11 +284,31 @@ static struct ws2812b_device_info ws2812b_device_info = {
 	.clock_speed = 800000,
 };
 
+/* define the different board types for the ws2812b chip*/
+static struct rgbled_board_info ws2812_boards[] = {
+	{
+		.compatible	= "worldsemi,ws2812,strip",
+		.width		= 1,
+		.height		= 1,
+	},
+	{ }
+};
+
+static struct ws2812b_device_info ws2812_device_info = {
+	.name = "ws2812-spi-fb",
+	.boards = ws2812_boards,
+	.clock_speed = 400000,
+};
+
 /* define the match table */
 static const struct of_device_id ws2812b_of_match[] = {
 	{
 		.compatible	= "worldsemi,ws2812b",
 		.data		= &ws2812b_device_info,
+	},
+	{
+		.compatible	= "worldsemi,ws2812",
+		.data		= &ws2812_device_info,
 	},
 	{ }
 };
