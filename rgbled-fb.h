@@ -36,30 +36,11 @@ struct rgbled_pixel {
 	u8 brightness;
 };
 
-struct rgbled_board_info {
-	char	*compatible;
-	u32	id;
-	u32	x;
-	u32	y;
-	u32	width;
-	u32	height;
-	u32	pixel;
-
-	u32	pitch;
-
-	bool	layout_yx;
-	bool	inverted_x;
-	bool	inverted_y;
-
-	u32 flags;
-
-	int (*getPixelValue)(
-		struct rgbled_board_info *board,
-		int pixel_num,
-		struct rgbled_pixel *pix);
-
-	struct list_head list;
+struct rgbled_coordinates {
+	int x, y;
 };
+
+struct rgbled_board_info;
 
 struct rgbled_fb {
 	struct fb_info *info;
@@ -75,24 +56,63 @@ struct rgbled_fb {
 	int pixel;
 
 	void (*deferred_work)(struct rgbled_fb*);
+	void (*finish_work)(struct rgbled_fb*);
+
+	void (*setPixelValue)(struct rgbled_fb *rfb,
+			      struct rgbled_board_info *board,
+			      int pixel_num,
+			      struct rgbled_pixel *pix);
+	void (*getPixelValue)(struct rgbled_fb *rfb,
+			      struct rgbled_board_info *board,
+			      struct rgbled_coordinates * coord,
+			      struct rgbled_pixel *pix);
+
 	void *par;
 };
 
+struct rgbled_board_info {
+	char	*compatible;
+	u32	id;
+	u32	x;
+	u32	y;
+	u32	width;
+	u32	height;
+	u32	pixel;
+
+	u32	pitch;
+
+	bool	layout_yx;
+	bool	inverted_x;
+	bool	inverted_y;
+
+	void (*getPixelCoords)(struct rgbled_fb *rfb,
+			       struct rgbled_board_info *board,
+			       int pixel_num,
+			       struct rgbled_coordinates *coord);
+	void (*getPixelValue)(struct rgbled_fb *rfb,
+			      struct rgbled_board_info *board,
+			      struct rgbled_coordinates * coord,
+			      struct rgbled_pixel *pix);
+
+	struct list_head list;
+};
+
 /* typical pixel handler */
-extern int rgbled_getPixelValue_linear(
-	struct rgbled_board_info *board,
-	int pixel_num,
-	struct rgbled_pixel *pix);
+extern void rgbled_getPixelCoords_linear(
+		struct rgbled_fb *rfb,
+		struct rgbled_board_info *board,
+		int pixel_num,
+		struct rgbled_coordinates *coord);
 
-extern int rgbled_getPixelValue_winding(
-	struct rgbled_board_info *board,
-	int pixel_num,
-	struct rgbled_pixel *pix);
+extern void rgbled_getPixelCoords_winding(
+		struct rgbled_fb *rfb,
+		struct rgbled_board_info *board,
+		int pixel_num,
+		struct rgbled_coordinates *coord);
 
-
-extern struct rgbled_fb *rgbled_alloc(struct device *dev);
-extern int rgbled_scan_boards(struct rgbled_fb *fb,
-			      struct rgbled_board_info *boards);
-extern int rgbled_register(struct rgbled_fb *fb, const char *name);
+extern struct rgbled_fb *rgbled_alloc(struct device *dev,
+				      const char *name,
+				      struct rgbled_board_info *boards);
+extern int rgbled_register(struct rgbled_fb *fb);
 
 #endif /* __RGBLED_FB_H */

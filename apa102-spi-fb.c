@@ -92,31 +92,45 @@ struct rgbled_board_info apa102_boards[] = {
 	{ }
 };
 
-static void apa102_deferred_work(struct rgbled_fb *rfb) {
+static void apa102_setPixelValue(struct rgbled_fb *rfb,
+				struct rgbled_board_info *board,
+				int pixel_num,
+				struct rgbled_pixel *pix)
+{
 	struct apa102_data *bs=rfb->par;
-	fb_info(rfb->info, "Update led screen:\n");
+	struct apa102_pixel *spix = &bs->spi_data[pixel_num+1];
+
+	spix->brightness = 0xe0 | (pix->brightness >> 3);
+	spix->r = pix->red;
+	spix->g = pix->green;
+	spix->b = pix->blue;
+}
+
+static void apa102_finish_work(struct rgbled_fb *rfb)
+{
+	struct apa102_data *bs=rfb->par;
+
+	/* just issue spi_sync on the prepared spi message */
+	spi_sync(bs->spi, &bs->spi_msg);
 }
 
 static int apa102_probe(struct spi_device *spi)
 {
 	struct apa102_data *bs;
-	int err;
 	int len;
 
 	bs = devm_kzalloc(&spi->dev, sizeof(*bs), GFP_KERNEL);
 	if (!bs)
 		return -ENOMEM;
 
-	bs->rgbled_fb = rgbled_alloc(&spi->dev);
+	bs->rgbled_fb = rgbled_alloc(&spi->dev, DEVICE_NAME, apa102_boards);
 	if (!bs->rgbled_fb)
 		return -ENOMEM;
-	/* scan boards to get string size */
-	err = rgbled_scan_boards(bs->rgbled_fb, apa102_boards);
-	if (err)
-		return err;
+	if (IS_ERR(bs->rgbled_fb))
+		return PTR_ERR(bs->rgbled_fb);
 
 	/* set up the spi-message and buffers */
-	len = 
+	len =
 	      /* start frame + pixel data themselves */
 	      + (bs->rgbled_fb->pixel + 1) * sizeof(struct apa102_pixel)
 	      /* end signal - extra clocks needed for propagation*/
@@ -134,17 +148,20 @@ static int apa102_probe(struct spi_device *spi)
 	bs->spi_xfer.tx_buf = bs->spi_data;
 	spi_message_add_tail(&bs->spi_xfer, &bs->spi_msg);
 
-	bs->rgbled_fb->deferred_work = apa102_deferred_work;
+	/* setting up deferred work */
+	bs->rgbled_fb->setPixelValue = apa102_setPixelValue;
+	bs->rgbled_fb->finish_work = apa102_finish_work;
 	bs->rgbled_fb->par = bs;
 
-	return rgbled_register(bs->rgbled_fb, DEVICE_NAME);
+	/* and register */
+	return rgbled_register(bs->rgbled_fb);
 }
 
 static const struct of_device_id apa102_of_match[] = {
-        {
-                .compatible     = "shiji-led,apa102",
-        },
-        { }
+	{
+		.compatible	= "shiji-led,apa102",
+	},
+	{ }
 };
 MODULE_DEVICE_TABLE(of, apa102_of_match);
 

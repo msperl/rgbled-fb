@@ -68,31 +68,151 @@ static void rgbled_imageblit(struct fb_info *info,
 	rgbled_schedule(info);
 }
 
-int rgbled_getPixelValue_linear(
+int rgbled_getPixelCoords_generic(
+	struct rgbled_fb *rfb,
 	struct rgbled_board_info *board,
-	int pixel_num,
-	struct rgbled_pixel *pix)
+	int board_pixel_num,
+	struct rgbled_coordinates *coord)
 {
+	int x, y;
+
+	if (board->layout_yx) {
+		x = board_pixel_num % board->height;
+		y = board_pixel_num / board->height;
+
+	} else {
+		x = board_pixel_num % board->width;
+		y = board_pixel_num / board->width;
+	}
+
+	if (board->inverted_x)
+		x = board->width - 1 - x;
+
+	if (board->inverted_y)
+		y = board->height - 1 - y;
+
+	coord->x = x;
+	coord->y = y;
+
 	return 0;
 }
-EXPORT_SYMBOL_GPL(rgbled_getPixelValue_linear);
 
-int rgbled_getPixelValue_winding(
+void rgbled_getPixelCoords_linear(
+	struct rgbled_fb *rfb,
 	struct rgbled_board_info *board,
-	int pixel_num,
-	struct rgbled_pixel *pix)
+	int board_pixel_num,
+	struct rgbled_coordinates *coord)
 {
-	return 0;
-}
-EXPORT_SYMBOL_GPL(rgbled_getPixelValue_winding);
+	rgbled_getPixelCoords_generic(rfb, board, board_pixel_num, coord);
 
-void rgbled_deferred_io(struct fb_info *fb,
+	coord->x += board->x;
+	coord->y += board->y;
+}
+
+EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_linear);
+
+void rgbled_getPixelCoords_winding(
+	struct rgbled_fb *rfb,
+	struct rgbled_board_info *board,
+	int board_pixel_num,
+	struct rgbled_coordinates *coord)
+{
+	rgbled_getPixelCoords_generic(rfb, board, board_pixel_num, coord);
+
+	/* handle layout */
+	if (board->layout_yx) {
+		if (coord->x & 1) {
+			coord->y = board->y + board->height - 1 - coord->y;
+		} else {
+			coord->y = board->y + coord->y;
+		}
+		coord->x += board->x;
+	} else {
+		if (coord->y & 1) {
+			coord->x = board->x + board->width - 1 - coord->x;
+		} else {
+			coord->x = board->x + coord->x;
+		}
+		coord->y += board->y;
+	}
+}
+EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_winding);
+
+static void rgbled_getPixelValue(struct rgbled_fb *rfb,
+				 struct rgbled_board_info *board,
+				 struct rgbled_coordinates *coord,
+				 struct rgbled_pixel *pix)
+{
+	struct rgbled_pixel *pix_array = (struct rgbled_pixel *)rfb->vmem;
+
+	/* get the pixel Value */
+	if (board->getPixelValue) {
+		return board->getPixelValue(rfb, board, coord, pix);
+	} else {
+		if (rfb->getPixelValue)
+			return rfb->getPixelValue(rfb, board, coord, pix);
+	}
+
+	/* the default implementation */
+
+	if (coord->x > rfb->width)
+		return;
+	if (coord->y < rfb->height)
+		return;
+
+	*pix = pix_array[coord->y * rfb->width + coord->x];
+}
+
+static void rgbled_handle_board(struct rgbled_fb *rfb,
+				int start_pixel,
+				struct rgbled_board_info *board)
+{
+	struct rgbled_coordinates coord;
+	struct rgbled_pixel pix;
+	int i;
+
+	for(i=0; i< board->pixel; i++) {
+		/* get the coordinates */
+		if (board->getPixelCoords)
+			board->getPixelCoords(rfb, board, i, &coord);
+		else
+			rgbled_getPixelCoords_linear(rfb, board, i, &coord);
+		/* now get the corresponding value */
+		rgbled_getPixelValue(rfb, board, &coord, &pix);
+
+		/* here we could add gamma control if needed */
+
+		/* and set it */
+		rfb->setPixelValue(rfb, board, start_pixel + i, &pix);
+
+	}
+}
+
+static void rgbled_deferred_io_default(struct rgbled_fb *rfb)
+{
+	struct rgbled_board_info *board;
+	int start_pixel = 0;
+
+	/* iterate over all boards */
+	list_for_each_entry(board, &rfb->boards, list) {
+		rgbled_handle_board(rfb, start_pixel, board);
+		start_pixel += board->pixel;
+	}
+
+	/* and handle the final step */
+	if (rfb->finish_work)
+		rfb->finish_work(rfb);
+}
+
+static void rgbled_deferred_io(struct fb_info *fb,
 			struct list_head *pagelist)
 {
 	struct rgbled_fb *rfb = fb->par;
 
 	if (rfb->deferred_work)
 		rfb->deferred_work(rfb);
+	else
+		rgbled_deferred_io_default(rfb);
 }
 
 static struct fb_ops rgbled_ops = {
@@ -105,7 +225,7 @@ static struct fb_ops rgbled_ops = {
 
 /* all the comented out are to get filled in */
 static struct fb_fix_screeninfo fb_fix_screeninfo_default = {
-	/* .id		= "ws2812b FB", */
+	.id		= "rgbled-fb", /* overrridden by implementation */
 	.type		= FB_TYPE_PACKED_PIXELS,
 	.visual		= FB_VISUAL_TRUECOLOR,
 	.xpanstep	= 0,
@@ -192,14 +312,33 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 	of_property_read_u32_index(nc, "y",      0, &bi->y);
 	of_property_read_u32_index(nc, "width",  0, &bi->width);
 	of_property_read_u32_index(nc, "height", 0, &bi->height);
+	of_property_read_u32_index(nc, "pixel",  0, &bi->pixel);
+	of_property_read_u32_index(nc, "pitch",  0, &bi->pixel);
 
-	/* calculate size of this */
-	bi->pixel = bi->width * bi->height;
-	rfb->pixel += bi->pixel;
+	/* some boolean settings */
+	if (of_find_property(nc, "layout-y-x",0))
+		bi->layout_yx = true;
+	if (of_find_property(nc, "inverted-x",0))
+		bi->inverted_x = true;
+	if (of_find_property(nc, "inverted-y",0))
+		bi->inverted_y = true;
+
+	/* calculate size of board in pixel if not set */
+	if (!bi->pixel)
+		bi->pixel = bi->width * bi->height;
+
+	/* check values */
+	if (!bi->width)
+		return -EINVAL;
+	if (!bi->height)
+		return -EINVAL;
 	if (!bi->pixel)
 		return -EINVAL;
 
-	/* setting max coordinates */
+	/* add the number of pixel to the chain */
+	rfb->pixel += bi->pixel;
+
+	/* setting max coordinates for the framebuffer */
 	if (rfb->width < bi->x + bi->width)
 		rfb->width = bi->x + bi->width;
 	if (rfb->height < bi->x + bi->height)
@@ -213,24 +352,14 @@ int rgbled_scan_boards_match(struct rgbled_fb *rfb,
 			     struct rgbled_board_info *boards)
 {
 	struct device *dev = rfb->info->device;
-	const char *name[6];
 	int i;
-	int err;
 	int idx;
 
 	/* get the compatible property */
-	for(i=0;i<6;i++)
-		name[i]=NULL;
-	err = of_property_read_string_helper(nc, "compatible", (const char **)&name, 6, 0);
-	dev_err(dev, "Check node: %s - %i - %s\n",
-		nc->full_name, err, name[0]);
-
 	for(i = 0 ; boards[i].compatible ; i++) {
-		dev_err(dev, "Check node: %i %s\n", i, boards[i].compatible);
 		idx = of_property_match_string(nc, "compatible",
 					boards[i].compatible);
 		if (idx >= 0) {
-			dev_err(dev, "match\n");
 			return rgbled_probe_of_board(rfb, nc,
 						     &boards[i]);
 		}
@@ -283,11 +412,14 @@ static void rgbled_framebuffer_release(struct device *dev, void *res)
 	rfb->info = NULL;
 }
 
-struct rgbled_fb *rgbled_alloc(struct device *dev)
+struct rgbled_fb *rgbled_alloc(struct device *dev,
+			       const char *name,
+			       struct rgbled_board_info *boards)
 {
 	struct fb_info *fb;
 	struct rgbled_fb *rfb;
 	struct rgbled_fb **ptr;
+	int err;
 
 	/* initialize our own structure */
 	rfb = devm_kzalloc(dev, sizeof(*rfb), GFP_KERNEL);
@@ -304,12 +436,12 @@ struct rgbled_fb *rgbled_alloc(struct device *dev)
 	ptr = devres_alloc(rgbled_framebuffer_release,
 			   sizeof(*ptr), GFP_KERNEL);
 	if (!ptr)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 	/* allocate framebuffer */
 	fb = framebuffer_alloc(0, dev);
 	if (!fb) {
 		devres_free(ptr);
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 	}
 	*ptr = rfb;
 	devres_add(dev, ptr);
@@ -317,6 +449,20 @@ struct rgbled_fb *rgbled_alloc(struct device *dev)
 	/* and add a pointer back and forth */
 	fb->par = rfb;
 	rfb->info = fb;
+
+	/* set up basics */
+	fb->fbops	= &rgbled_ops;
+	fb->fbdefio	= &rfb->deferred_io;
+	fb->fix		= fb_fix_screeninfo_default;
+	fb->var		= fb_var_screeninfo_default;
+	fb->flags	= FBINFO_FLAG_DEFAULT | FBINFO_VIRTFB;
+	/* needs to happen agfter the assignement above */
+	strncpy(fb->fix.id, name, sizeof(fb->fix.id));
+
+	/* scan boards to get string size */
+	err = rgbled_scan_boards(rfb, boards);
+	if (err)
+		return ERR_PTR(err);
 
 	return rfb;
 }
@@ -332,7 +478,7 @@ static void rgbled_unregister_framebuffer(struct device *dev, void *res)
 	unregister_framebuffer(rfb->info);
 }
 
-int rgbled_register(struct rgbled_fb *rfb, const char *name)
+int rgbled_register(struct rgbled_fb *rfb)
 {
 	struct fb_info *fb = rfb->info;
 	int err;
@@ -344,14 +490,6 @@ int rgbled_register(struct rgbled_fb *rfb, const char *name)
 	if (!ptr)
 		return -ENOMEM;
 	*ptr = rfb;
-
-	/* set up basics */
-	strncpy(fb->fix.id, name, sizeof(fb->fix.id));
-	fb->fbops	= &rgbled_ops;
-	fb->fbdefio	= &rfb->deferred_io;
-	fb->fix		= fb_fix_screeninfo_default;
-	fb->var		= fb_var_screeninfo_default;
-	fb->flags	= FBINFO_FLAG_DEFAULT | FBINFO_VIRTFB;
 
 	/* set up sizes */
 	fb->var.xres_virtual = fb->var.xres = rfb->width;
@@ -391,10 +529,9 @@ int rgbled_register(struct rgbled_fb *rfb, const char *name)
 	/* now register resource cleanup */
 	devres_add(fb->device, ptr);
 
-	strncpy(fb->fix.id, name, sizeof(fb->fix.id));
 	fb_info(fb,
-		"rgbled-fb of size %ux%u with %i led of type %s - %s\n",
-		rfb->width, rfb->height, rfb->pixel, fb->fix.id, name);
+		"rgbled-fb of size %ux%u with %i led of type %s\n",
+		rfb->width, rfb->height, rfb->pixel, fb->fix.id);
 
 	return 0;
 }
