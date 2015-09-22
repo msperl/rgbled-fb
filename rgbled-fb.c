@@ -23,6 +23,7 @@
 #include <linux/device.h>
 #include <linux/fb.h>
 #include <linux/kernel.h>
+#include <linux/leds.h>
 #include <linux/list.h>
 #include <linux/list_sort.h>
 #include <linux/module.h>
@@ -579,8 +580,10 @@ int rgbled_scan_boards(struct rgbled_fb *rfb,
 	/* iterate over all entries in the device-tree */
 	for_each_available_child_of_node(dev->of_node, nc) {
 		err = rgbled_scan_boards_match(rfb, nc, boards) ;
-		if (err)
+		if (err) {
+			of_node_put(nc);
 			return err;
+		}
 	}
 
 	/* sort list - used to shift out the data
@@ -785,17 +788,129 @@ static int rgbled_register_sysfs(struct rgbled_fb *rfb)
 	return err;
 }
 
+struct rgbled_led_data {
+	struct led_classdev cdev;
+	struct rgbled_fb *rfb;
+	struct rgbled_board_info *board;
+};
+
+static void rgbled_unregister_single_led(struct device *dev, void *res)
+{
+	struct rgbled_led_data *led = res;
+
+	led_classdev_unregister(&led->cdev);
+}
+
+static int rgbled_register_single_led(struct rgbled_fb *rfb,
+				      struct rgbled_board_info *board,
+				      const char *label,
+				      struct rgbled_coordinates *coord,
+				      const char *state,
+				      const char *trigger)
+{
+	struct rgbled_led_data *led;
+
+	/* get a new led instance */
+	led = devres_alloc(rgbled_unregister_single_led,
+			   sizeof(*led), GFP_KERNEL);
+	if (!led)
+		return -ENOMEM;
+
+	led->rfb = rfb;
+	led->board = board;
+
+	led->cdev.name = label;
+	led->cdev.default_trigger = NULL;
+	led->cdev.brightness_set = NULL;
+	led->cdev.brightness_get = NULL;
+
+	devres_free(led);
+
+	return 0;
+}
+
+static int rgbled_register_board_led_single(struct rgbled_fb *rfb,
+					    struct rgbled_board_info *board,
+					    struct device_node *nc)
+{
+	struct fb_info * fb = rfb->info;
+	struct rgbled_coordinates coord;
+	const char *label, *trigger, *state;
+	u32 pix;
+	int len;
+	struct property *prop = of_find_property(nc, "reg", &len);
+
+	/* if no property then return */
+	if (!prop) {
+		fb_err(fb, "missing reg property in %s\n", nc->name);
+		return -EINVAL;
+	}
+	/* check for 1d/2d */
+	switch (len) {
+	case 1: /* 1d approach */
+		/* no error checking needed */
+		of_property_read_u32_index(nc, "reg", 0, &pix);
+		if (pix >= board->pixel) {
+			fb_err(fb, "reg value %i is out of range in %s\n",
+				pix, nc->name);
+			return -EINVAL;
+		}
+		/* translate coordinates */
+		if (board->getPixelCoords)
+			board->getPixelCoords(rfb, board,
+						pix, &coord);
+		else
+			rgbled_getPixelCoords_linear(rfb,board,
+						     pix, &coord);
+		break;
+	case 2: /* need to handle the 2d case */
+	default:
+		fb_err(fb,
+		       "unexpected number of arguments in reg(%i) in %s\n",
+			len, nc->name);
+		return -EINVAL;
+		break;
+	}
+	/* now we got the coordinates, so run the rest */
+
+	/* define the label */
+	if (of_property_read_string(nc, "label", &label)) {
+		label = nc->name;
+	}
+	if (!label)
+		return -EINVAL;
+
+	/* read the state */
+	if (of_property_read_string(nc, "default-state", &state)) {
+		state = "keep";
+	}
+	if (!state)
+		return -EINVAL;
+
+	/* read the trigger */
+	of_property_read_string(nc, "linux,default-trigger", &trigger);
+
+	/* and now register it for real */
+	return rgbled_register_single_led(rfb, board,
+					  label, &coord,
+					  state, trigger);
+}
+
 static int rgbled_register_board_led(struct rgbled_fb *rfb,
 				     struct rgbled_board_info *board)
 {
-	struct fb_info *fb = rfb->info;
-	struct device_node *nc = fb->device->of_node;
 	struct device_node *bnc = board->of_node;
+	struct device_node *nc;
+	int err;
 
-	/* check names and settings */
-
-	/* now handle it appropriately */
-
+	/* iterate all defined */
+	for_each_available_child_of_node(bnc, nc) {
+		err = rgbled_register_board_led_single(rfb, board, nc);
+		if (err) {
+			of_node_put(nc);
+			return err;
+		}
+	}
 
 	return 0;
 }
