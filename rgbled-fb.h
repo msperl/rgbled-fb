@@ -103,6 +103,19 @@ struct rgbled_board_info {
 	bool			inverted_x;
 	bool			inverted_y;
 
+	u32			flags;
+#define RGBLED_FLAG_CHANGE_WIDTH	BIT(0)
+#define RGBLED_FLAG_CHANGE_HEIGHT	BIT(1)
+#define RGBLED_FLAG_CHANGE_PITCH	BIT(2)
+#define RGBLED_FLAG_CHANGE_LAYOUT	BIT(3)
+#define RGBLED_FLAG_CHANGE_WHL  	(RGBLED_FLAG_CHANGE_WIDTH |  \
+					 RGBLED_FLAG_CHANGE_HEIGHT | \
+					 RGBLED_FLAG_CHANGE_LAYOUT)
+#define RGBLED_FLAG_CHANGE_WHLP  	(RGBLED_FLAG_CHANGE_WHL |    \
+					 RGBLED_FLAG_CHANGE_PITCH)
+
+	int (*multiple)(struct rgbled_board_info *board, u32 val);
+
 	void (*getPixelCoords)(struct rgbled_fb *rfb,
 			       struct rgbled_board_info *board,
 			       int pixel_num,
@@ -121,8 +134,12 @@ struct rgbled_board_info {
 	/* the default brightness */
 	u8			brightness;
 
+	struct device_node	*of_node;
 	struct list_head 	list;
 };
+
+extern int rgbled_board_multiple_width(struct rgbled_board_info *board, u32 val);
+extern int rgbled_board_multiple_height(struct rgbled_board_info *board, u32 val);
 
 /* typical pixel handler */
 extern void rgbled_getPixelCoords_linear(
@@ -131,7 +148,7 @@ extern void rgbled_getPixelCoords_linear(
 		int pixel_num,
 		struct rgbled_coordinates *coord);
 
-extern void rgbled_getPixelCoords_winding(
+extern void rgbled_getPixelCoords_meander(
 		struct rgbled_fb *rfb,
 		struct rgbled_board_info *board,
 		int pixel_num,

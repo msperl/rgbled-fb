@@ -54,40 +54,53 @@ struct apa102_data {
 /* define the different FB types */
 struct rgbled_board_info apa102_boards[] = {
 	{
+		.compatible	= "shiji-led,apa102,strip",
+		.width		= 1,
+		.height		= 1,
+		.pitch		= 30,
+		.flags		= RGBLED_FLAG_CHANGE_WHLP,
+	},
+	{
 		.compatible	= "shiji-led,apa102,strip,30",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 30,
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
 		.compatible	= "shiji-led,apa102,strip,60",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 60,
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
 		.compatible	= "shiji-led,apa102,strip,144",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 144,
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
 		.compatible	= "adafruit,dotstar,strip,30",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 30,
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
 		.compatible	= "adafruit,dotstar,strip,60",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 60,
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
 		.compatible	= "adafruit,dotstar,strip,144",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 144,
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{ }
 };

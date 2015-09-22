@@ -198,26 +198,30 @@ static struct rgbled_board_info ws2812b_boards[] = {
 		.compatible	= "worldsemi,ws2812b,strip",
 		.width		= 1,
 		.height		= 1,
+		.flags		= RGBLED_FLAG_CHANGE_WHLP,
 	},
 	{
 		.compatible	= "adafruit,neopixel,strip,30",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 30,
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
 		.compatible	= "adafruit,neopixel,strip,60",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 60,
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
 		.compatible	= "adafruit,neopixel,strip,144",
 		.width		= 1,
 		.height		= 1,
 		.pitch		= 144,
-
+		.flags		= RGBLED_FLAG_CHANGE_WHL,
 	},
+#ifdef VERIFIED_SETTINGS
 	{
 		.compatible	= "adafruit,neopixel,ring,12",
 		.pixel		= 12,
@@ -259,33 +263,39 @@ static struct rgbled_board_info ws2812b_boards[] = {
 		.pitch		= 112,
 */
 	},
+#endif
 	{
 		.compatible	= "adafruit,neopixel,matrix,8x8",
 		.width		= 8,
 		.height		= 8,
-		.getPixelCoords	= rgbled_getPixelCoords_winding,
+		.getPixelCoords	= rgbled_getPixelCoords_meander,
 		.pitch		= 112,
+		.multiple	= rgbled_board_multiple_height,
 	},
 	{
 		.compatible	= "adafruit,neopixel,matrix,16x16",
 		.width		= 16,
 		.height		= 16,
-		.getPixelCoords	= rgbled_getPixelCoords_winding,
+		.getPixelCoords	= rgbled_getPixelCoords_meander,
 		.pitch		= 112,
+		.multiple	= rgbled_board_multiple_height,
 	},
 	{
 		.compatible	= "adafruit,neopixel,matrix,32x8",
 		.width		= 32,
 		.height		= 8,
 		.pixel		= 256,
-		.getPixelCoords	= rgbled_getPixelCoords_winding,
+		.getPixelCoords	= rgbled_getPixelCoords_meander,
 		.layout_yx	= true,
 		.pitch		= 112,
+		.multiple	= rgbled_board_multiple_width,
 	},
 	{
 		.compatible	= "adafruit,neopixel,stick,8",
 		.width		= 8,
+		.height		= 1,
 		.pitch		= 156,
+		.multiple	= rgbled_board_multiple_height,
 	},
 	{ }
 };

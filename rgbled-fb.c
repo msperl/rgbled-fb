@@ -108,7 +108,7 @@ void rgbled_getPixelCoords_linear(
 }
 EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_linear);
 
-void rgbled_getPixelCoords_winding(
+void rgbled_getPixelCoords_meander(
 	struct rgbled_fb *rfb,
 	struct rgbled_board_info *board,
 	int board_pixel_num,
@@ -129,7 +129,7 @@ void rgbled_getPixelCoords_winding(
 	coord->x += board->x;
 	coord->y += board->y;
 }
-EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_winding);
+EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_meander);
 
 static inline void rgbled_getPixelValue_set(struct rgbled_fb *rfb,
 					    struct rgbled_board_info *board,
@@ -397,6 +397,8 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 	struct device *dev = rfb->info->device;
 	struct rgbled_board_info *bi;
 	u32 tmp;
+	char *prop;
+	int err;
 
 	bi = devm_kzalloc(dev, sizeof(*bi), GFP_KERNEL);
 	if (!bi)
@@ -409,33 +411,92 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 	list_add(&bi->list, &rfb->boards);
 
 	/* copy the full name */
-	bi->name = of_node_full_name(nc);
+	bi->name = nc->name;
+
+	/* and set device node reference */
+	bi->of_node = nc;
 
 	/* now fill in from the device tree the overrides */
 	if (of_property_read_u32_index(nc, "reg",    0, &bi->id))
 		return -EINVAL;
+
+	/* basic layout stuff */
 	of_property_read_u32_index(nc, "x",      0, &bi->x);
 	of_property_read_u32_index(nc, "y",      0, &bi->y);
-	of_property_read_u32_index(nc, "width",  0, &bi->width);
-	of_property_read_u32_index(nc, "height", 0, &bi->height);
-	of_property_read_u32_index(nc, "pixel",  0, &bi->pixel);
-	of_property_read_u32_index(nc, "pitch",  0, &bi->pitch);
-	of_property_read_u32_index(nc, "current-limit",
-				   0, &bi->current_limit);
+	prop = "layout-y-x";
+	if (of_find_property(nc, prop,0)) {
+		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
+			bi->layout_yx = true;
+		else
+			goto parse_error;
+	}
+	prop = "inverted-x";
+	if (of_find_property(nc, prop,0)) {
+		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
+			bi->inverted_x = true;
+		else
+			goto parse_error;
+	}
+	prop = "inverted-y";
+	if (of_find_property(nc, prop,0)) {
+		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
+			bi->inverted_y = true;
+		else
+			goto parse_error;
+	}
+	prop = "meander";
+	if (of_find_property(nc, prop,0)) {
+		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
+			bi->getPixelCoords = rgbled_getPixelCoords_meander;
+		else
+			goto parse_error;
+	}
 
+	prop = "width";
+	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
+		if (bi->flags & RGBLED_FLAG_CHANGE_WIDTH)
+			bi->width = tmp;
+		else
+			goto parse_error;
+	}
+	prop = "height";
+	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
+		if (bi->flags & RGBLED_FLAG_CHANGE_HEIGHT)
+			bi->height = tmp;
+		else
+			goto parse_error;
+	}
+	prop = "pitch";
+	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
+		if (bi->flags & RGBLED_FLAG_CHANGE_PITCH)
+			bi->pitch = tmp;
+		else
+			goto parse_error;
+	}
+	prop = "current-limit";
+	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
+		if (bi->current_limit)
+			bi->current_limit = min(tmp, bi->current_limit);
+		else
+			bi->current_limit = tmp;
+	}
+	/* multiple towards the end */
+	prop = "multiple";
+	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
+		if (bi->multiple) {
+			err = bi->multiple(bi, tmp);
+			if (err)
+				return err;
+		} else {
+			goto parse_error;
+		}
+	}
+
+	/* finally brightness */
 	if (!of_property_read_u32_index(nc, "brightness",0, &tmp))
 		bi->brightness = min_t(u32, tmp, 255);
 	else
 		bi->brightness = 255;
-
-
-	/* some boolean settings */
-	if (of_find_property(nc, "layout-y-x",0))
-		bi->layout_yx = true;
-	if (of_find_property(nc, "inverted-x",0))
-		bi->inverted_x = true;
-	if (of_find_property(nc, "inverted-y",0))
-		bi->inverted_y = true;
 
 	/* calculate size of board in pixel if not set */
 	if (!bi->pixel)
@@ -459,7 +520,31 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 		rfb->height = bi->y + bi->height;
 
 	return 0;
+
+parse_error:
+	fb_err(rfb->info,
+		"\"%s\" property not allowed in %s\n",
+		prop, bi->name);
+	return -EINVAL;
 }
+
+int rgbled_board_multiple_width(struct rgbled_board_info *board, u32 val)
+{
+	board->width *= val;
+	board->pixel *= val;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rgbled_board_multiple_width);
+
+int rgbled_board_multiple_height(struct rgbled_board_info *board, u32 val)
+{
+	board->height *= val;
+	board->pixel *= val;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rgbled_board_multiple_height);
 
 int rgbled_scan_boards_match(struct rgbled_fb *rfb,
 			     struct device_node *nc,
@@ -480,7 +565,7 @@ int rgbled_scan_boards_match(struct rgbled_fb *rfb,
 	}
 
 	/* not matching */
-	dev_err(dev, "Incompatible node %s found\n", nc->full_name);
+	dev_err(dev, "Incompatible node %s found\n", nc->name);
 	return -EINVAL;
 }
 
@@ -700,6 +785,36 @@ static int rgbled_register_sysfs(struct rgbled_fb *rfb)
 	return err;
 }
 
+static int rgbled_register_board_led(struct rgbled_fb *rfb,
+				     struct rgbled_board_info *board)
+{
+	struct fb_info *fb = rfb->info;
+	struct device_node *nc = fb->device->of_node;
+	struct device_node *bnc = board->of_node;
+
+	/* check names and settings */
+
+	/* now handle it appropriately */
+
+
+	return 0;
+}
+
+static int rgbled_register_led(struct rgbled_fb *rfb)
+{
+	struct rgbled_board_info *board;
+	int err;
+
+	/* register each in each board - if given */
+	list_for_each_entry(board, &rfb->boards, list) {
+		err = rgbled_register_board_led(rfb, board);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 int rgbled_register(struct rgbled_fb *rfb)
 {
 	struct fb_info *fb = rfb->info;
@@ -773,6 +888,13 @@ int rgbled_register(struct rgbled_fb *rfb)
 	if (err)
 		return err;
 
+	/* and register led */
+	rgbled_register_led(rfb);
+
+	/* and start an initial update of the framebuffer to clean it */
+	rgbled_deferred_io_default(rfb);
+
+	/* and report the status */
 	fb_info(fb,
 		"rgbled-fb of size %ux%u with %i led of type %s\n",
 		rfb->width, rfb->height, rfb->pixel, fb->fix.id);

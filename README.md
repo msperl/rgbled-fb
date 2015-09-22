@@ -39,24 +39,27 @@ fb2: fb@0 {
 	 * - depending on power supply */
 	current-limit = <4000>;
 	/*
-	 * define the panels 
+	 * define the panels
 	 * note that if they overlap they will produce identical content
-	 * for the defined portion 
+	 * for the defined portion
 	 */
 	panel@0 {
 		reg = <0>;
 		compatible = "adafruit,neopixel,matrix,32x8";
-		/* override the default height by multiplying by 2 */
-		height = <16>;
 	};
 	panel@1 {
 		reg = <1>;
+		compatible = "adafruit,neopixel,matrix,32x8";
+		x = <0>;
+		y = <8>;
+	};
+	panel@1 {
+		reg = <2>;
 		compatible = "adafruit,neopixel,matrix,8x8";
 		/* set the coordinates */
 		x = <32>;
 		y = <0>;
-		/* override the default height by multiplying by 2 */
-		height = <16>;
+		multiple = <2>;
 	};
 };
 ```
@@ -74,6 +77,10 @@ Lots of values are exposed in /sys/class/graphics/fbX/:
 
 # Missing/todo:
 * better documentation
-* upsreaming to official kernel
+* upstreaming to official kernel
+* mixing different densities
+  * allowing "regional averaging"
+  * allowing "radial averaging" (for "Ambilight(tm)" like approaches)
 * merge with foundation kernels
 * exposing led separately via /sys/class/led on request
+* panel rotation
