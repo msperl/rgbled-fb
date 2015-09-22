@@ -27,7 +27,7 @@ You need to configure the framebuffer via the device-tree
 Here an example for a ws2812b string that creates a 40x16 pixel framebuffer
 from 2 matrix 8x32 plus 2 matrix 8x8:
 
-``
+```
 fb2: fb@0 {
 	reg = <0>;
 	status = "okay";
@@ -59,7 +59,7 @@ fb2: fb@0 {
 		height = <16>;
 	};
 };
-``
+```
 
 # sysfs
 Lots of values are exposed in /sys/class/graphics/fbX/:
