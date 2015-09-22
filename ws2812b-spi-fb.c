@@ -88,6 +88,9 @@ struct ws2812b_device_info {
 	char *name;
 	struct rgbled_board_info* boards;
 	int clock_speed;
+	u32 max_current_red;
+	u32 max_current_green;
+	u32 max_current_blue;
 };
 
 /* the private data structure for this device */
@@ -140,6 +143,7 @@ static int ws2812b_probe(struct spi_device *spi)
 	int len;
 	const struct of_device_id *of_id;
 	const struct ws2812b_device_info *dinfo;
+	struct rgbled_fb* rfb;
 
 	/* get the boards for this board */
 	of_id = of_match_device(ws2812b_of_match, &spi->dev);
@@ -152,14 +156,15 @@ static int ws2812b_probe(struct spi_device *spi)
 	if (!bs)
 		return -ENOMEM;
 
-	bs->rgbled_fb = rgbled_alloc(&spi->dev, dinfo->name, dinfo->boards);
-	if (!bs->rgbled_fb)
+	rfb = rgbled_alloc(&spi->dev, dinfo->name, dinfo->boards);
+	bs->rgbled_fb = rfb;
+	if (!rfb)
 		return -ENOMEM;
-	if (IS_ERR(bs->rgbled_fb))
-		return PTR_ERR(bs->rgbled_fb);
+	if (IS_ERR(rfb))
+		return PTR_ERR(rfb);
 
 	/* set up the spi-message and buffers */
-	len = bs->rgbled_fb->pixel * sizeof(struct ws2812b_pixel)
+	len = rfb->pixel * sizeof(struct ws2812b_pixel)
 		+ 15;
 	bs->spi_data = devm_kzalloc(&spi->dev, len, GFP_KERNEL);
 	if (!bs->spi_data)
@@ -172,12 +177,19 @@ static int ws2812b_probe(struct spi_device *spi)
 	spi_message_add_tail(&bs->spi_xfer, &bs->spi_msg);
 
 	/* setting up deferred work */
-	bs->rgbled_fb->setPixelValue = ws2812b_setPixelValue;
-	bs->rgbled_fb->finish_work = ws2812b_finish_work;
-	bs->rgbled_fb->par = bs;
+	rfb->setPixelValue = ws2812b_setPixelValue;
+	rfb->finish_work = ws2812b_finish_work;
+
+	/* copy the current values */
+	rfb->max_current_red = dinfo->max_current_red;
+	rfb->max_current_green = dinfo->max_current_green;
+	rfb->max_current_blue = dinfo->max_current_blue;
+
+	/* set the reverse pointer */
+	rfb->par = bs;
 
 	/* and register */
-	return rgbled_register(bs->rgbled_fb);
+	return rgbled_register(rfb);
 }
 
 /* define the different board types for the ws2812b chip*/
@@ -279,9 +291,12 @@ static struct rgbled_board_info ws2812b_boards[] = {
 };
 
 static struct ws2812b_device_info ws2812b_device_info = {
-	.name = "ws2812b-spi-fb",
-	.boards = ws2812b_boards,
-	.clock_speed = 800000,
+	.name			= "ws2812b-spi-fb",
+	.boards			= ws2812b_boards,
+	.clock_speed		= 800000,
+	.max_current_red	= 15,
+	.max_current_green	= 15,
+	.max_current_blue	= 15,
 };
 
 /* define the different board types for the ws2812b chip*/
@@ -295,9 +310,12 @@ static struct rgbled_board_info ws2812_boards[] = {
 };
 
 static struct ws2812b_device_info ws2812_device_info = {
-	.name = "ws2812-spi-fb",
-	.boards = ws2812_boards,
-	.clock_speed = 400000,
+	.name			= "ws2812-spi-fb",
+	.boards			= ws2812_boards,
+	.clock_speed		= 400000,
+	.max_current_red	= 15,
+	.max_current_green	= 15,
+	.max_current_blue	= 15,
 };
 
 /* define the match table */

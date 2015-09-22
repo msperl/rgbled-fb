@@ -131,13 +131,18 @@ void rgbled_getPixelCoords_winding(
 }
 EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_winding);
 
-static inline void rgbled_getPixelValue_set(struct rgbled_pixel *pix,
+static inline void rgbled_getPixelValue_set(struct rgbled_fb *rfb,
+					    struct rgbled_board_info *board,
+					    struct rgbled_pixel *pix,
 					    u8 r, u8 g, u8 b, u8 bright)
 {
 	pix->red = r;
 	pix->green = g;
 	pix->blue = b;
-	pix->brightness = bright;
+	pix->brightness = (u32)bright *
+		rfb->brightness *
+		board->brightness /
+		255 / 255;
 }
 
 static void rgbled_getPixelValue(struct rgbled_fb *rfb,
@@ -158,25 +163,28 @@ static void rgbled_getPixelValue(struct rgbled_fb *rfb,
 
 	/* the default implementation */
 	if (coord->x > rfb->width)
-		return 	rgbled_getPixelValue_set(pix, 0, 0, 0, 0);
+		return 	rgbled_getPixelValue_set(rfb, board, pix, 0, 0, 0, 0);
 	if (coord->y > rfb->height)
-		return 	rgbled_getPixelValue_set(pix, 0, 0, 0, 0);
+		return 	rgbled_getPixelValue_set(rfb, board, pix, 0, 0, 0, 0);
 
 	/* copy pixel data */
 	vpix = &vpix_array[coord->y * rfb->width + coord->x];
 
-	rgbled_getPixelValue_set(pix, vpix->red, vpix->green, vpix->blue,
+	rgbled_getPixelValue_set(rfb, board, pix,
+				 vpix->red, vpix->green, vpix->blue,
 				 vpix->brightness);
-
 }
 
-static void rgbled_handle_board(struct rgbled_fb *rfb,
-				int start_pixel,
-				struct rgbled_board_info *board)
+static u8 rgbled_handle_board(struct rgbled_fb *rfb,
+			      int start_pixel,
+			      struct rgbled_board_info *board)
 {
 	struct rgbled_coordinates coord;
 	struct rgbled_pixel pix;
 	int i;
+	u32 c = 0;
+	/* can't name it current because of a macro
+	 * defined in include/asm-generic/current.h */
 
 	for(i=0; i< board->pixel; i++) {
 		/* get the coordinates */
@@ -192,19 +200,106 @@ static void rgbled_handle_board(struct rgbled_fb *rfb,
 		/* and set it */
 		rfb->setPixelValue(rfb, board, start_pixel + i, &pix);
 
+		/* and calculate current estimate */
+		c += pix.red   * pix.brightness * rfb->max_current_red;
+		c += pix.green * pix.brightness * rfb->max_current_green;
+		c += pix.blue  * pix.brightness * rfb->max_current_blue;
 	}
+	/* and scale down */
+	c /= 255*255;
+
+	board->current_current_tmp = c;
+	rfb->current_current_tmp += c;
+
+	if (!board->current_limit)
+		return 255;
+	if (board->current_limit >= c)
+		return 255;
+
+	fb_warn(rfb->info,
+		"board %s consumes %i mA and exceeded current limit of %i mA\n",
+		board->name, c, board->current_limit);
+
+	/* return a different scale */
+	return  (u32)254 * board->current_limit / c;
+}
+
+static u8 rgbled_handle_boards(struct rgbled_fb *rfb)
+{
+	struct rgbled_board_info *board;
+	int start_pixel = 0;
+	u8 rescale;
+
+	/* reset current estimation */
+	rfb->current_current_tmp = 0;
+
+	/* iterate over all boards */
+	list_for_each_entry(board, &rfb->boards, list) {
+		rescale = rgbled_handle_board(rfb, start_pixel, board);
+		/* handle rescale request by propagating */
+		if (rescale != 255)
+			return rescale;
+		start_pixel += board->pixel;
+	}
+
+	/* check current */
+	if (!rfb->current_limit)
+		return 255;
+	if (rfb->current_limit >= rfb->current_current_tmp) {
+		return 255;
+	}
+
+	fb_warn(rfb->info,
+		"total panel consumes %i mA and exceeded current limit of %i mA\n",
+		rfb->current_current_tmp, rfb->current_limit);
+
+	/* need to return with new scaling */
+	return  (u32)254 * rfb->current_limit / rfb->current_current_tmp;
+}
+
+static void rgbled_update_stats(struct rgbled_fb *rfb)
+{
+	struct rgbled_board_info *board;
+
+	spin_lock(&rfb->lock);
+
+	/* commit currents */
+	list_for_each_entry(board, &rfb->boards, list) {
+		board->current_current = board->current_current_tmp;
+		if (board->current_current > board->current_max)
+			board->current_max = board->current_current;
+	}
+	rfb->current_current = rfb->current_current_tmp;
+	if (rfb->current_current > rfb->current_max)
+		rfb->current_max = rfb->current_current;
+
+	rfb->screen_updates++;
+
+	spin_unlock(&rfb->lock);
 }
 
 static void rgbled_deferred_io_default(struct rgbled_fb *rfb)
 {
-	struct rgbled_board_info *board;
-	int start_pixel = 0;
+	int iterations = 0;
+	u8 rescale = rgbled_handle_boards(rfb);
 
-	/* iterate over all boards */
-	list_for_each_entry(board, &rfb->boards, list) {
-		rgbled_handle_board(rfb, start_pixel, board);
-		start_pixel += board->pixel;
+	/* rescale the global brightness */
+	while(rescale < 255) {
+		/* change brightness */
+		rfb->brightness = rfb->brightness * rescale / 255;
+		/* and rerun the calculation */
+		rescale = rgbled_handle_boards(rfb);
+		/* and exit early after a few loops */
+		iterations++;
+		if (iterations > 256) {
+			fb_warn(rfb->info,
+				"could not reduce brightness enough to reach required current limit - not updating display");
+			return;
+		}
 	}
+
+	/* commit the calculated currents */
+	rgbled_update_stats(rfb);
 
 	/* and handle the final step */
 	if (rfb->finish_work)
@@ -301,6 +396,7 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 {
 	struct device *dev = rfb->info->device;
 	struct rgbled_board_info *bi;
+	u32 tmp;
 
 	bi = devm_kzalloc(dev, sizeof(*bi), GFP_KERNEL);
 	if (!bi)
@@ -312,6 +408,9 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 	/* add to list */
 	list_add(&bi->list, &rfb->boards);
 
+	/* copy the full name */
+	bi->name = of_node_full_name(nc);
+
 	/* now fill in from the device tree the overrides */
 	if (of_property_read_u32_index(nc, "reg",    0, &bi->id))
 		return -EINVAL;
@@ -320,7 +419,15 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 	of_property_read_u32_index(nc, "width",  0, &bi->width);
 	of_property_read_u32_index(nc, "height", 0, &bi->height);
 	of_property_read_u32_index(nc, "pixel",  0, &bi->pixel);
-	of_property_read_u32_index(nc, "pitch",  0, &bi->pixel);
+	of_property_read_u32_index(nc, "pitch",  0, &bi->pitch);
+	of_property_read_u32_index(nc, "current-limit",
+				   0, &bi->current_limit);
+
+	if (!of_property_read_u32_index(nc, "brightness",0, &tmp))
+		bi->brightness = min_t(u32, tmp, 255);
+	else
+		bi->brightness = 255;
+
 
 	/* some boolean settings */
 	if (of_find_property(nc, "layout-y-x",0))
@@ -438,6 +545,7 @@ struct rgbled_fb *rgbled_alloc(struct device *dev,
 
 	/* now set up specific things */
 	INIT_LIST_HEAD(&rfb->boards);
+	spin_lock_init(&rfb->lock);
 
 	/* now allocate the framebuffer_info via devres */
 	ptr = devres_alloc(rgbled_framebuffer_release,
@@ -485,11 +593,135 @@ static void rgbled_unregister_framebuffer(struct device *dev, void *res)
 	unregister_framebuffer(rfb->info);
 }
 
+static int rgbled_register_sysfs_boards(struct rgbled_fb *rfb)
+{
+	return 0;
+}
+
+#define SYSFS_HELPER_SHOW(name, field)					\
+	static ssize_t name ## _show(struct device *dev,		\
+				struct device_attribute *a,		\
+				char *buf)				\
+	{								\
+		struct fb_info *fb = dev_get_drvdata(dev);		\
+		struct rgbled_fb *rfb = fb->par;			\
+		u32 val;						\
+									\
+		spin_lock(&rfb->lock);					\
+		val = rfb->field;					\
+		spin_unlock(&rfb->lock);				\
+									\
+		return sprintf(buf, "%i\n",val);			\
+	}
+
+#define SYSFS_HELPER_STORE(name, field, max)				\
+	static ssize_t name ## _store(struct device *dev,		\
+				struct device_attribute *a,		\
+				const char *buf, size_t count)		\
+	{								\
+		struct fb_info *fb = dev_get_drvdata(dev);		\
+		struct rgbled_fb *rfb = fb->par;			\
+		char *end;						\
+		u32 val = simple_strtoul(buf, &end, 0);			\
+									\
+		if (end == buf)						\
+			return -EINVAL;					\
+		if (val > max)						\
+			return -EINVAL;					\
+									\
+		spin_lock(&rfb->lock);					\
+		rfb->field = val;					\
+		rfb->current_max = 0;					\
+		spin_unlock(&rfb->lock);				\
+									\
+		rgbled_schedule(fb);					\
+									\
+		return count;						\
+	}
+
+#define SYSFS_HELPER_RO(name, field)					\
+	SYSFS_HELPER_SHOW(name, field);					\
+	static DEVICE_ATTR_RO(name)
+
+#define SYSFS_HELPER_RW(name, field, maxv)				\
+	SYSFS_HELPER_SHOW(name, field);					\
+	SYSFS_HELPER_STORE(name, field, maxv);				\
+	static DEVICE_ATTR_RW(name)
+
+/* this is unfortunately needed - otherwise "current" is expanded by cpp */
+#undef current
+
+SYSFS_HELPER_RW(brightness, brightness, 255);
+SYSFS_HELPER_RO(current, current_current);
+SYSFS_HELPER_RO(current_max, current_max);
+SYSFS_HELPER_RW(current_limit, current_limit, 100000000);
+SYSFS_HELPER_RW(led_max_current_red, max_current_red, 10000);
+SYSFS_HELPER_RW(led_max_current_green, max_current_green, 10000);
+SYSFS_HELPER_RW(led_max_current_blue, max_current_blue, 10000);
+SYSFS_HELPER_RO(led_count, pixel);
+SYSFS_HELPER_RO(updates, screen_updates);
+
+static struct device_attribute *device_attrs[] = {
+	&dev_attr_brightness,
+	&dev_attr_current,
+	&dev_attr_current_max,
+	&dev_attr_current_limit,
+	&dev_attr_led_max_current_red,
+	&dev_attr_led_max_current_green,
+	&dev_attr_led_max_current_blue,
+	&dev_attr_led_count,
+	&dev_attr_updates,
+};
+
+static int rgbled_register_sysfs(struct rgbled_fb *rfb)
+{
+	struct fb_info *fb = rfb->info;
+	int i;
+	int err = 0;
+
+	/* register boards */
+	err = rgbled_register_sysfs_boards(rfb);
+	if (err)
+		return err;
+
+	/* register all device_attributes */
+	for (i = 0; i < ARRAY_SIZE(device_attrs); i++) {
+		/* create the file */
+		err = device_create_file(fb->dev, device_attrs[i]);
+		if (err)
+			break;
+	}
+
+	if (err) {
+		while (--i >= 0)
+			device_remove_file(fb->dev, device_attrs[i]);
+	}
+
+	return err;
+}
+
 int rgbled_register(struct rgbled_fb *rfb)
 {
 	struct fb_info *fb = rfb->info;
+	struct device_node *nc = fb->device->of_node;
 	int err;
 	struct rgbled_fb **ptr;
+	u32 tmp;
+
+	/* read brightness and current limits from device-tree */
+	of_property_read_u32_index(nc, "current-limit",
+				   0, &rfb->current_limit);
+	of_property_read_u32_index(nc, "max-current-red",
+				   0, &rfb->max_current_red);
+	of_property_read_u32_index(nc, "max-current-green",
+				   0, &rfb->max_current_green);
+	of_property_read_u32_index(nc, "max-current-blue",
+				   0, &rfb->max_current_blue);
+
+	if (!of_property_read_u32_index(nc, "brightness",0, &tmp))
+		rfb->brightness = min_t(u32, tmp, 255);
+	else
+		rfb->brightness = 255;
 
 	/* prepare release */
 	ptr = devres_alloc(rgbled_unregister_framebuffer,
@@ -535,6 +767,11 @@ int rgbled_register(struct rgbled_fb *rfb)
 	}
 	/* now register resource cleanup */
 	devres_add(fb->device, ptr);
+
+	/* and register additional information in sysfs */
+	err = rgbled_register_sysfs(rfb);
+	if (err)
+		return err;
 
 	fb_info(fb,
 		"rgbled-fb of size %ux%u with %i led of type %s\n",

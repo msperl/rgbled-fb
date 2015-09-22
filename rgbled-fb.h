@@ -28,32 +28,37 @@
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/list_sort.h>
+#include <linux/spinlock.h>
 
 struct rgbled_pixel {
-	u8 red;
-	u8 green;
-	u8 blue;
-	u8 brightness;
+	u8			red;
+	u8			green;
+	u8			blue;
+	u8			brightness;
 };
 
 struct rgbled_coordinates {
-	int x, y;
+	int			x;
+	int			y;
 };
 
 struct rgbled_board_info;
 
 struct rgbled_fb {
-	struct fb_info *info;
-	struct fb_deferred_io deferred_io;
+	struct fb_info		*info;
+	struct fb_deferred_io	deferred_io;
 
-	struct list_head boards;
-	bool duplicate_id;
+	struct list_head	boards;
+	spinlock_t		lock;
+	void			*par;
+	bool			duplicate_id;
 
-	char __iomem *vmem;
-	int width;
-	int height;
-	int vmem_size;
-	int pixel;
+	char __iomem		*vmem;
+	int			width;
+	int			height;
+	int			vmem_size;
+
+	int			pixel;
 
 	void (*deferred_work)(struct rgbled_fb*);
 	void (*finish_work)(struct rgbled_fb*);
@@ -67,23 +72,36 @@ struct rgbled_fb {
 			      struct rgbled_coordinates * coord,
 			      struct rgbled_pixel *pix);
 
-	void *par;
+	/* current estimates */
+	u32			current_limit;
+	u32			current_current;
+	u32			current_current_tmp;
+	u32			current_max;
+
+	u32			max_current_red;
+	u32			max_current_green;
+	u32			max_current_blue;
+
+	u8			brightness;
+
+	u32			screen_updates;
 };
 
 struct rgbled_board_info {
-	char	*compatible;
-	u32	id;
-	u32	x;
-	u32	y;
-	u32	width;
-	u32	height;
-	u32	pixel;
+	const char     		*compatible;
+	const char		*name;
+	u32			id;
+	u32			x;
+	u32			y;
+	u32			width;
+	u32			height;
+	u32			pixel;
 
-	u32	pitch;
+	u32			pitch;
 
-	bool	layout_yx;
-	bool	inverted_x;
-	bool	inverted_y;
+	bool			layout_yx;
+	bool			inverted_x;
+	bool			inverted_y;
 
 	void (*getPixelCoords)(struct rgbled_fb *rfb,
 			       struct rgbled_board_info *board,
@@ -94,7 +112,16 @@ struct rgbled_board_info {
 			      struct rgbled_coordinates * coord,
 			      struct rgbled_pixel *pix);
 
-	struct list_head list;
+	/* current estimates */
+	u32			current_limit;
+	u32			current_current;
+	u32			current_current_tmp;
+	u32			current_max;
+
+	/* the default brightness */
+	u8			brightness;
+
+	struct list_head 	list;
 };
 
 /* typical pixel handler */
