@@ -37,6 +37,13 @@ struct rgbled_pixel {
 	u8			brightness;
 };
 
+enum rgbled_pixeltype {
+	rgbled_pixeltype_red,
+	rgbled_pixeltype_green,
+	rgbled_pixeltype_blue,
+	rgbled_pixeltype_brightness
+};
+
 struct rgbled_coordinates {
 	int			x;
 	int			y;
@@ -51,6 +58,8 @@ struct rgbled_fb {
 	struct list_head	boards;
 	spinlock_t		lock;
 	void			*par;
+	const char		*name;
+	struct device_node	*of_node;
 	bool			duplicate_id;
 
 	char __iomem		*vmem;

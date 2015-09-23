@@ -146,12 +146,19 @@ static inline void rgbled_getPixelValue_set(struct rgbled_fb *rfb,
 		255 / 255;
 }
 
+static struct rgbled_pixel *rgbled_getPixel(struct rgbled_fb *rfb,
+					    struct rgbled_coordinates *coord)
+{
+	struct rgbled_pixel *vpix_array = (struct rgbled_pixel *)rfb->vmem;
+
+	return &vpix_array[coord->y * rfb->width + coord->x];
+}
+
 static void rgbled_getPixelValue(struct rgbled_fb *rfb,
 				 struct rgbled_board_info *board,
 				 struct rgbled_coordinates *coord,
 				 struct rgbled_pixel *pix)
 {
-	struct rgbled_pixel *vpix_array = (struct rgbled_pixel *)rfb->vmem;
 	struct rgbled_pixel *vpix;
 
 	/* get the pixel Value */
@@ -169,7 +176,7 @@ static void rgbled_getPixelValue(struct rgbled_fb *rfb,
 		return 	rgbled_getPixelValue_set(rfb, board, pix, 0, 0, 0, 0);
 
 	/* copy pixel data */
-	vpix = &vpix_array[coord->y * rfb->width + coord->x];
+	vpix = rgbled_getPixel(rfb, coord);
 
 	rgbled_getPixelValue_set(rfb, board, pix,
 				 vpix->red, vpix->green, vpix->blue,
@@ -791,7 +798,7 @@ static int rgbled_register_sysfs(struct rgbled_fb *rfb)
 struct rgbled_led_data {
 	struct led_classdev cdev;
 	struct rgbled_fb *rfb;
-	struct rgbled_board_info *board;
+	u8 *pixel;
 };
 
 static void rgbled_unregister_single_led(struct device *dev, void *res)
@@ -801,14 +808,40 @@ static void rgbled_unregister_single_led(struct device *dev, void *res)
 	led_classdev_unregister(&led->cdev);
 }
 
+static void rgbled_brightness_set(struct led_classdev *led_cdev,
+				  enum led_brightness brightness)
+{
+	struct rgbled_led_data *led = container_of(led_cdev,
+						   typeof(*led), cdev);
+
+	*led->pixel = brightness;
+
+	rgbled_schedule(led->rfb->info);
+}
+
+static enum led_brightness rgbled_brightness_get(struct led_classdev *led_cdev)
+{
+	struct rgbled_led_data *led = container_of(led_cdev,
+						   typeof(*led), cdev);
+
+	return *led->pixel;
+}
+
 static int rgbled_register_single_led(struct rgbled_fb *rfb,
 				      struct rgbled_board_info *board,
 				      const char *label,
 				      struct rgbled_coordinates *coord,
-				      const char *state,
+				      enum rgbled_pixeltype type,
 				      const char *trigger)
 {
 	struct rgbled_led_data *led;
+	struct rgbled_pixel *vpix;
+	int err;
+
+	/* get the pixel */
+	vpix = rgbled_getPixel(rfb, coord);
+	if (!vpix)
+		return -EINVAL;
 
 	/* get a new led instance */
 	led = devres_alloc(rgbled_unregister_single_led,
@@ -817,14 +850,34 @@ static int rgbled_register_single_led(struct rgbled_fb *rfb,
 		return -ENOMEM;
 
 	led->rfb = rfb;
-	led->board = board;
 
-	led->cdev.name = label;
-	led->cdev.default_trigger = NULL;
-	led->cdev.brightness_set = NULL;
-	led->cdev.brightness_get = NULL;
+	led->cdev.name = devm_kstrdup(rfb->info->dev, label, GFP_KERNEL);
+	led->cdev.max_brightness = 255;
 
-	devres_free(led);
+	led->cdev.brightness_set = rgbled_brightness_set;
+	led->cdev.brightness_get = rgbled_brightness_get;
+
+	led->cdev.default_trigger = trigger;
+
+	switch(type) {
+	case rgbled_pixeltype_red:
+		led->pixel = &vpix->red; break;
+	case rgbled_pixeltype_green:
+		led->pixel = &vpix->green; break;
+	case rgbled_pixeltype_blue:
+		led->pixel = &vpix->blue; break;
+	case rgbled_pixeltype_brightness:
+		led->pixel = &vpix->brightness; break;
+	default:
+		devres_free(led);
+		return -EINVAL;
+	}
+
+	err = led_classdev_register(rfb->info->dev, &led->cdev);
+	if (err) {
+		devres_free(led);
+		return err;
+	}
 
 	return 0;
 }
@@ -835,7 +888,10 @@ static int rgbled_register_board_led_single(struct rgbled_fb *rfb,
 {
 	struct fb_info * fb = rfb->info;
 	struct rgbled_coordinates coord;
-	const char *label, *trigger, *state;
+	const char *label = NULL;
+	const char *trigger = NULL;
+	const char *channel_str;
+	enum rgbled_pixeltype channel;
 	u32 pix;
 	int len;
 	struct property *prop = of_find_property(nc, "reg", &len);
@@ -845,6 +901,26 @@ static int rgbled_register_board_led_single(struct rgbled_fb *rfb,
 		fb_err(fb, "missing reg property in %s\n", nc->name);
 		return -EINVAL;
 	}
+	/* channel */
+	if (!of_property_read_string(nc, "channel", &channel_str)) {
+		fb_err(fb, "missing channel property in %s\n", nc->name);
+		return -EINVAL;
+	}
+	if (strcmp(channel_str, "red") == 0)
+		channel = rgbled_pixeltype_red;
+	else if (strcmp(channel_str, "green") == 0)
+		channel = rgbled_pixeltype_green;
+	else if (strcmp(channel_str, "blue") == 0)
+		channel = rgbled_pixeltype_blue;
+	else if (strcmp(channel_str, "brightness") == 0)
+		channel = rgbled_pixeltype_brightness;
+	else {
+		fb_err(fb, "wrong channel property value %s in %s\n",
+		       channel_str, nc->name);
+		return -EINVAL;
+	}
+
+
 	/* check for 1d/2d */
 	switch (len) {
 	case 1: /* 1d approach */
@@ -880,28 +956,74 @@ static int rgbled_register_board_led_single(struct rgbled_fb *rfb,
 	if (!label)
 		return -EINVAL;
 
-	/* read the state */
-	if (of_property_read_string(nc, "default-state", &state)) {
-		state = "keep";
-	}
-	if (!state)
-		return -EINVAL;
-
 	/* read the trigger */
 	of_property_read_string(nc, "linux,default-trigger", &trigger);
 
 	/* and now register it for real */
 	return rgbled_register_single_led(rfb, board,
 					  label, &coord,
-					  state, trigger);
+					  channel, trigger);
+}
+
+static int rgbled_register_board_led_all(struct rgbled_fb *rfb,
+					 struct rgbled_board_info *board)
+{
+	int i, err;
+	char label[32];
+	struct rgbled_coordinates coord;
+
+	for(i=0; i < board->pixel; i++) {
+		/* translate coordinates */
+		if (board->getPixelCoords)
+			board->getPixelCoords(rfb, board,
+					i, &coord);
+		else
+			rgbled_getPixelCoords_linear(rfb,board,
+						     i, &coord);
+		/* now register the individual led components */
+		snprintf(label, sizeof(label), "%s:%i:%i:red",
+			 rfb->name, coord.x, coord.y);
+		err = rgbled_register_single_led(rfb, board, label, &coord,
+						 rgbled_pixeltype_red,
+					         NULL);
+		if (err)
+			return err;
+
+		snprintf(label, sizeof(label), "%s:%i:%i:green",
+			 rfb->name, coord.x, coord.y);
+		err = rgbled_register_single_led(rfb, board, label, &coord,
+						 rgbled_pixeltype_green,
+						 NULL);
+		if (err)
+			return err;
+
+		snprintf(label, sizeof(label), "%s:%i:%i:blue",
+			 rfb->name, coord.x, coord.y);
+		err = rgbled_register_single_led(rfb, board, label, &coord,
+						 rgbled_pixeltype_blue,
+						 NULL);
+		if (err)
+			return err;
+
+		snprintf(label, sizeof(label), "%s:%i:%i:brightness",
+			 rfb->name, coord.x, coord.y);
+		err = rgbled_register_single_led(rfb, board, label, &coord,
+						 rgbled_pixeltype_brightness,
+						 NULL);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 static int rgbled_register_board_led(struct rgbled_fb *rfb,
 				     struct rgbled_board_info *board)
 {
+	struct device_node *rnc = rfb->of_node;
 	struct device_node *bnc = board->of_node;
 	struct device_node *nc;
-	int err;
+	int err = 0;
 
 	/* iterate all defined */
 	for_each_available_child_of_node(bnc, nc) {
@@ -912,7 +1034,12 @@ static int rgbled_register_board_led(struct rgbled_fb *rfb,
 		}
 	}
 
-	return 0;
+	/* if we are defined then expose all */
+	if (of_find_property(rnc, "linux,expose-all-led", NULL) ||
+	    of_find_property(bnc, "linux,expose-all-led", NULL))
+		err = rgbled_register_board_led_all(rfb, board);
+
+	return err;
 }
 
 static int rgbled_register_led(struct rgbled_fb *rfb)
@@ -937,6 +1064,11 @@ int rgbled_register(struct rgbled_fb *rfb)
 	int err;
 	struct rgbled_fb **ptr;
 	u32 tmp;
+
+	/* some basics */
+	rfb->of_node = nc;
+	if (!rfb->name)
+		rfb->name = nc->name;
 
 	/* read brightness and current limits from device-tree */
 	of_property_read_u32_index(nc, "current-limit",
