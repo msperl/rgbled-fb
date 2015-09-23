@@ -140,7 +140,8 @@ int rgbled_register_sysfs(struct rgbled_fb *rfb)
 struct rgbled_led_data {
 	struct led_classdev cdev;
 	struct rgbled_fb *rfb;
-	u8 *pixel;
+	struct rgbled_pixel *pixel;
+	enum rgbled_pixeltype type;
 };
 
 static void rgbled_unregister_single_led(struct device *dev, void *res)
@@ -155,8 +156,37 @@ static void rgbled_brightness_set(struct led_classdev *led_cdev,
 {
 	struct rgbled_led_data *led = container_of(led_cdev,
 						   typeof(*led), cdev);
-
-	*led->pixel = brightness;
+	/* set the value itself */
+	switch (led->type) {
+	case rgbled_pixeltype_red:
+		led->pixel->red = brightness; break;
+	case rgbled_pixeltype_green:
+		led->pixel->green = brightness; break;
+	case rgbled_pixeltype_blue:
+		led->pixel->blue = brightness; break;
+	case rgbled_pixeltype_brightness:
+		led->pixel->brightness = brightness;
+		break;
+	}
+	/* modifications to make things visible if nothing is set */
+	switch (led->type) {
+	case rgbled_pixeltype_red:
+	case rgbled_pixeltype_green:
+	case rgbled_pixeltype_blue:
+		if(!led->pixel->brightness)
+			led->pixel->brightness= 255;
+		break;
+	case rgbled_pixeltype_brightness:
+		/* if the rgb values are off, so set to white */
+		if ((!led->pixel->red) &&
+		    (!led->pixel->green) &&
+		    (!led->pixel->blue)) {
+			led->pixel->red = 255;
+			led->pixel->green = 255;
+			led->pixel->blue = 255;
+		}
+		break;
+	}
 
 	rgbled_schedule(led->rfb->info);
 }
@@ -165,8 +195,18 @@ static enum led_brightness rgbled_brightness_get(struct led_classdev *led_cdev)
 {
 	struct rgbled_led_data *led = container_of(led_cdev,
 						   typeof(*led), cdev);
+	switch (led->type) {
+	case rgbled_pixeltype_red:
+		return led->pixel->red;
+	case rgbled_pixeltype_green:
+		return led->pixel->green;
+	case rgbled_pixeltype_blue:
+		return led->pixel->blue;
+	case rgbled_pixeltype_brightness:
+		return led->pixel->brightness;
+	}
 
-	return *led->pixel;
+	return 0;
 }
 
 static int rgbled_register_single_led(struct rgbled_fb *rfb,
@@ -200,20 +240,8 @@ static int rgbled_register_single_led(struct rgbled_fb *rfb,
 	led->cdev.brightness_get = rgbled_brightness_get;
 
 	led->cdev.default_trigger = trigger;
-
-	switch(type) {
-	case rgbled_pixeltype_red:
-		led->pixel = &vpix->red; break;
-	case rgbled_pixeltype_green:
-		led->pixel = &vpix->green; break;
-	case rgbled_pixeltype_blue:
-		led->pixel = &vpix->blue; break;
-	case rgbled_pixeltype_brightness:
-		led->pixel = &vpix->brightness; break;
-	default:
-		devres_free(led);
-		return -EINVAL;
-	}
+	led->pixel = vpix;
+	led->type = type;
 
 	/* register the led */
 	err = led_classdev_register(rfb->info->dev, &led->cdev);
