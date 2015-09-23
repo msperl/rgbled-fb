@@ -23,7 +23,6 @@
 #ifndef __RGBLED_FB_H
 #define __RGBLED_FB_H
 
-
 #include <linux/fb.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -167,5 +166,17 @@ extern struct rgbled_fb *rgbled_alloc(struct device *dev,
 				      const char *name,
 				      struct rgbled_board_info *boards);
 extern int rgbled_register(struct rgbled_fb *fb);
+
+
+/* mostly internal functions - not exported */
+extern int rgbled_register_of(struct rgbled_fb *rfb);
+extern int rgbled_scan_boards_of(struct rgbled_fb *rfb,
+				 struct rgbled_board_info *boards);
+extern int rgbled_register_sysfs(struct rgbled_fb *rfb);
+extern int rgbled_register_boards(struct rgbled_fb *rfb);
+extern struct rgbled_pixel *rgbled_getPixel(struct rgbled_fb *rfb,
+					    struct rgbled_coordinates *coord);
+
+extern void rgbled_schedule(struct fb_info *info);
 
 #endif /* __RGBLED_FB_H */
