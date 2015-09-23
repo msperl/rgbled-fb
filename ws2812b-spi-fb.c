@@ -176,6 +176,10 @@ static int ws2812b_probe(struct spi_device *spi)
 	bs->spi_xfer.tx_buf = bs->spi_data;
 	spi_message_add_tail(&bs->spi_xfer, &bs->spi_msg);
 
+	/* and estimate the refresh rate */
+	rfb->deferred_io.delay = max_t(unsigned long, 1,
+				       HZ * len * 8 / spi->max_speed_hz);
+
 	/* setting up deferred work */
 	rfb->setPixelValue = ws2812b_setPixelValue;
 	rfb->finish_work = ws2812b_finish_work;

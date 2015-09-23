@@ -594,10 +594,9 @@ int rgbled_register(struct rgbled_fb *rfb)
 	rgbled_deferred_io_default(rfb);
 
 	/* and report the status */
-	fb_info(fb,
-		"rgbled-fb of size %ux%u with %i led of type %s\n",
-		rfb->width, rfb->height, rfb->pixel, fb->fix.id);
-
+	fb_info(fb, "%s of size %ux%u with %i led, max refresh %luHz\n",
+		fb->fix.id, rfb->width, rfb->height, rfb->pixel,
+		HZ / rfb->deferred_io.delay);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(rgbled_register);
