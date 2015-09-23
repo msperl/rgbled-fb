@@ -78,9 +78,8 @@ Lots of values are exposed in /sys/class/graphics/fbX/:
 # Missing/todo:
 * better documentation
 * upstreaming to official kernel
+* merge with foundation kernels
 * mixing different densities
   * allowing "regional averaging"
   * allowing "radial averaging" (for "Ambilight(tm)" like approaches)
-* merge with foundation kernels
-* exposing led separately via /sys/class/led on request
 * panel rotation
