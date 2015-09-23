@@ -418,8 +418,8 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 	/* add to list */
 	list_add(&bi->list, &rfb->boards);
 
-	/* copy the full name */
-	bi->name = nc->name;
+	/* copy the full name (including @...) */
+	bi->name = nc->kobj.name;
 
 	/* and set device node reference */
 	bi->of_node = nc;
@@ -535,148 +535,6 @@ parse_error:
 		prop, bi->name);
 	return -EINVAL;
 }
-
-int rgbled_board_multiple_width(struct rgbled_board_info *board, u32 val)
-{
-	board->width *= val;
-	board->pixel *= val;
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(rgbled_board_multiple_width);
-
-int rgbled_board_multiple_height(struct rgbled_board_info *board, u32 val)
-{
-	board->height *= val;
-	board->pixel *= val;
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(rgbled_board_multiple_height);
-
-int rgbled_scan_boards_match(struct rgbled_fb *rfb,
-			     struct device_node *nc,
-			     struct rgbled_board_info *boards)
-{
-	struct device *dev = rfb->info->device;
-	int i;
-	int idx;
-
-	/* get the compatible property */
-	for(i = 0 ; boards[i].compatible ; i++) {
-		idx = of_property_match_string(nc, "compatible",
-					boards[i].compatible);
-		if (idx >= 0) {
-			return rgbled_probe_of_board(rfb, nc,
-						     &boards[i]);
-		}
-	}
-
-	/* not matching */
-	dev_err(dev, "Incompatible node %s found\n", nc->name);
-	return -EINVAL;
-}
-
-int rgbled_scan_boards(struct rgbled_fb *rfb,
-		       struct rgbled_board_info *boards)
-{
-	struct device *dev = rfb->info->device;
-	struct device_node *nc;
-	int err;
-
-	/* iterate over all entries in the device-tree */
-	for_each_available_child_of_node(dev->of_node, nc) {
-		err = rgbled_scan_boards_match(rfb, nc, boards) ;
-		if (err) {
-			of_node_put(nc);
-			return err;
-		}
-	}
-
-	/* sort list - used to shift out the data
-	 * this also checks that there are no duplicate ids...
-	 */
-	list_sort(rfb, &rfb->boards, rgbled_board_info_cmp);
-
-	/* if we got a duplicate, then fail */
-	if (rfb->duplicate_id) {
-			dev_err(dev, "duplicate\n");
-		return -EINVAL;
-	}
-
-	/* if we got no pixel, then fail */
-	if (!rfb->pixel) {
-		dev_err(dev, "nopixel\n");
-		return -EINVAL;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(rgbled_scan_boards);
-
-static void rgbled_framebuffer_release(struct device *dev, void *res)
-{
-	struct rgbled_fb *rfb = *(struct rgbled_fb **)res;
-	framebuffer_release(rfb->info);
-	rfb->info = NULL;
-}
-
-struct rgbled_fb *rgbled_alloc(struct device *dev,
-			       const char *name,
-			       struct rgbled_board_info *boards)
-{
-	struct fb_info *fb;
-	struct rgbled_fb *rfb;
-	struct rgbled_fb **ptr;
-	int err;
-
-	/* initialize our own structure */
-	rfb = devm_kzalloc(dev, sizeof(*rfb), GFP_KERNEL);
-
-	/* first copy the defaults */
-	memcpy(&rfb->deferred_io,
-	       &fb_deferred_io_default,
-	       sizeof(fb_deferred_io_default));
-
-	/* now set up specific things */
-	INIT_LIST_HEAD(&rfb->boards);
-	spin_lock_init(&rfb->lock);
-
-	/* now allocate the framebuffer_info via devres */
-	ptr = devres_alloc(rgbled_framebuffer_release,
-			   sizeof(*ptr), GFP_KERNEL);
-	if (!ptr)
-		return ERR_PTR(-ENOMEM);
-	/* allocate framebuffer */
-	fb = framebuffer_alloc(0, dev);
-	if (!fb) {
-		devres_free(ptr);
-		return ERR_PTR(-ENOMEM);
-	}
-	*ptr = rfb;
-	devres_add(dev, ptr);
-
-	/* and add a pointer back and forth */
-	fb->par = rfb;
-	rfb->info = fb;
-
-	/* set up basics */
-	fb->fbops	= &rgbled_ops;
-	fb->fbdefio	= &rfb->deferred_io;
-	fb->fix		= fb_fix_screeninfo_default;
-	fb->var		= fb_var_screeninfo_default;
-	fb->flags	= FBINFO_FLAG_DEFAULT | FBINFO_VIRTFB;
-	/* needs to happen agfter the assignement above */
-	strncpy(fb->fix.id, name, sizeof(fb->fix.id));
-
-	/* scan boards to get string size */
-	err = rgbled_scan_boards(rfb, boards);
-	if (err)
-		return ERR_PTR(err);
-
-	return rfb;
-}
-EXPORT_SYMBOL_GPL(rgbled_alloc);
 
 static void rgbled_unregister_framebuffer(struct device *dev, void *res)
 {
@@ -1057,6 +915,148 @@ static int rgbled_register_led(struct rgbled_fb *rfb)
 	return 0;
 }
 
+int rgbled_board_multiple_width(struct rgbled_board_info *board, u32 val)
+{
+	board->width *= val;
+	board->pixel *= val;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rgbled_board_multiple_width);
+
+int rgbled_board_multiple_height(struct rgbled_board_info *board, u32 val)
+{
+	board->height *= val;
+	board->pixel *= val;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rgbled_board_multiple_height);
+
+int rgbled_scan_boards_match(struct rgbled_fb *rfb,
+			     struct device_node *nc,
+			     struct rgbled_board_info *boards)
+{
+	struct device *dev = rfb->info->device;
+	int i;
+	int idx;
+
+	/* get the compatible property */
+	for(i = 0 ; boards[i].compatible ; i++) {
+		idx = of_property_match_string(nc, "compatible",
+					boards[i].compatible);
+		if (idx >= 0) {
+			return rgbled_probe_of_board(rfb, nc,
+						     &boards[i]);
+		}
+	}
+
+	/* not matching */
+	dev_err(dev, "Incompatible node %s found\n", nc->name);
+	return -EINVAL;
+}
+
+int rgbled_scan_boards(struct rgbled_fb *rfb,
+		       struct rgbled_board_info *boards)
+{
+	struct device *dev = rfb->info->device;
+	struct device_node *nc;
+	int err;
+
+	/* iterate over all entries in the device-tree */
+	for_each_available_child_of_node(dev->of_node, nc) {
+		err = rgbled_scan_boards_match(rfb, nc, boards) ;
+		if (err) {
+			of_node_put(nc);
+			return err;
+		}
+	}
+
+	/* sort list - used to shift out the data
+	 * this also checks that there are no duplicate ids...
+	 */
+	list_sort(rfb, &rfb->boards, rgbled_board_info_cmp);
+
+	/* if we got a duplicate, then fail */
+	if (rfb->duplicate_id) {
+			dev_err(dev, "duplicate\n");
+		return -EINVAL;
+	}
+
+	/* if we got no pixel, then fail */
+	if (!rfb->pixel) {
+		dev_err(dev, "nopixel\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rgbled_scan_boards);
+
+static void rgbled_framebuffer_release(struct device *dev, void *res)
+{
+	struct rgbled_fb *rfb = *(struct rgbled_fb **)res;
+	framebuffer_release(rfb->info);
+	rfb->info = NULL;
+}
+
+struct rgbled_fb *rgbled_alloc(struct device *dev,
+			       const char *name,
+			       struct rgbled_board_info *boards)
+{
+	struct fb_info *fb;
+	struct rgbled_fb *rfb;
+	struct rgbled_fb **ptr;
+	int err;
+
+	/* initialize our own structure */
+	rfb = devm_kzalloc(dev, sizeof(*rfb), GFP_KERNEL);
+
+	/* first copy the defaults */
+	memcpy(&rfb->deferred_io,
+	       &fb_deferred_io_default,
+	       sizeof(fb_deferred_io_default));
+
+	/* now set up specific things */
+	INIT_LIST_HEAD(&rfb->boards);
+	spin_lock_init(&rfb->lock);
+
+	/* now allocate the framebuffer_info via devres */
+	ptr = devres_alloc(rgbled_framebuffer_release,
+			   sizeof(*ptr), GFP_KERNEL);
+	if (!ptr)
+		return ERR_PTR(-ENOMEM);
+	/* allocate framebuffer */
+	fb = framebuffer_alloc(0, dev);
+	if (!fb) {
+		devres_free(ptr);
+		return ERR_PTR(-ENOMEM);
+	}
+	*ptr = rfb;
+	devres_add(dev, ptr);
+
+	/* and add a pointer back and forth */
+	fb->par = rfb;
+	rfb->info = fb;
+
+	/* set up basics */
+	fb->fbops	= &rgbled_ops;
+	fb->fbdefio	= &rfb->deferred_io;
+	fb->fix		= fb_fix_screeninfo_default;
+	fb->var		= fb_var_screeninfo_default;
+	fb->flags	= FBINFO_FLAG_DEFAULT | FBINFO_VIRTFB;
+	/* needs to happen agfter the assignement above */
+	strncpy(fb->fix.id, name, sizeof(fb->fix.id));
+
+	/* scan boards to get string size */
+	err = rgbled_scan_boards(rfb, boards);
+	if (err)
+		return ERR_PTR(err);
+
+	return rfb;
+}
+EXPORT_SYMBOL_GPL(rgbled_alloc);
+
 int rgbled_register(struct rgbled_fb *rfb)
 {
 	struct fb_info *fb = rfb->info;
@@ -1068,7 +1068,7 @@ int rgbled_register(struct rgbled_fb *rfb)
 	/* some basics */
 	rfb->of_node = nc;
 	if (!rfb->name)
-		rfb->name = nc->name;
+		rfb->name = nc->kobj.name;
 
 	/* read brightness and current limits from device-tree */
 	of_property_read_u32_index(nc, "current-limit",
