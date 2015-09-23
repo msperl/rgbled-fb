@@ -731,11 +731,15 @@ static int rgbled_register_single_led(struct rgbled_fb *rfb,
 		return -EINVAL;
 	}
 
+	/* register the led */
 	err = led_classdev_register(rfb->info->dev, &led->cdev);
 	if (err) {
 		devres_free(led);
 		return err;
 	}
+
+	/* add the resource to get removed */
+	devres_add(rfb->info->device, led);
 
 	return 0;
 }
