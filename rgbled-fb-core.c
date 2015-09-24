@@ -124,26 +124,26 @@ static struct fb_ops rgbled_ops = {
 
 void rgbled_getPixelCoords_generic(
 	struct rgbled_fb *rfb,
-	struct rgbled_board_info *board,
-	int board_pixel_num,
+	struct rgbled_panel_info *panel,
+	int panel_pixel_num,
 	struct rgbled_coordinates *coord)
 {
 	int x, y;
 
-	if (board->layout_yx) {
-		y = board_pixel_num % board->height;
-		x = board_pixel_num / board->height;
+	if (panel->layout_yx) {
+		y = panel_pixel_num % panel->height;
+		x = panel_pixel_num / panel->height;
 
 	} else {
-		x = board_pixel_num % board->width;
-		y = board_pixel_num / board->width;
+		x = panel_pixel_num % panel->width;
+		y = panel_pixel_num / panel->width;
 	}
 
-	if (board->inverted_x)
-		x = board->width - 1 - x;
+	if (panel->inverted_x)
+		x = panel->width - 1 - x;
 
-	if (board->inverted_y)
-		y = board->height - 1 - y;
+	if (panel->inverted_y)
+		y = panel->height - 1 - y;
 
 	coord->x = x;
 	coord->y = y;
@@ -151,42 +151,42 @@ void rgbled_getPixelCoords_generic(
 
 void rgbled_getPixelCoords_linear(
 	struct rgbled_fb *rfb,
-	struct rgbled_board_info *board,
-	int board_pixel_num,
+	struct rgbled_panel_info *panel,
+	int panel_pixel_num,
 	struct rgbled_coordinates *coord)
 {
-	rgbled_getPixelCoords_generic(rfb, board, board_pixel_num, coord);
+	rgbled_getPixelCoords_generic(rfb, panel, panel_pixel_num, coord);
 
-	coord->x += board->x;
-	coord->y += board->y;
+	coord->x += panel->x;
+	coord->y += panel->y;
 }
 EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_linear);
 
 void rgbled_getPixelCoords_meander(
 	struct rgbled_fb *rfb,
-	struct rgbled_board_info *board,
-	int board_pixel_num,
+	struct rgbled_panel_info *panel,
+	int panel_pixel_num,
 	struct rgbled_coordinates *coord)
 {
-	rgbled_getPixelCoords_generic(rfb, board, board_pixel_num, coord);
+	rgbled_getPixelCoords_generic(rfb, panel, panel_pixel_num, coord);
 
 	/* handle layout */
-	if (board->layout_yx) {
+	if (panel->layout_yx) {
 		if (coord->x & 1)
-			coord->y = board->height - 1 - coord->y;
+			coord->y = panel->height - 1 - coord->y;
 	} else {
 		if (coord->y & 1)
-			coord->x = board->width - 1 - coord->x;
-		coord->y += board->y;
+			coord->x = panel->width - 1 - coord->x;
+		coord->y += panel->y;
 	}
 
-	coord->x += board->x;
-	coord->y += board->y;
+	coord->x += panel->x;
+	coord->y += panel->y;
 }
 EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_meander);
 
 static inline void rgbled_getPixelValue_set(struct rgbled_fb *rfb,
-					    struct rgbled_board_info *board,
+					    struct rgbled_panel_info *panel,
 					    struct rgbled_pixel *pix,
 					    u8 r, u8 g, u8 b, u8 bright)
 {
@@ -195,7 +195,7 @@ static inline void rgbled_getPixelValue_set(struct rgbled_fb *rfb,
 	pix->blue = b;
 	pix->brightness = (u32)bright *
 		rfb->brightness *
-		board->brightness /
+		panel->brightness /
 		255 / 255;
 }
 
@@ -208,99 +208,104 @@ struct rgbled_pixel *rgbled_getPixel(struct rgbled_fb *rfb,
 }
 
 static void rgbled_getPixelValue(struct rgbled_fb *rfb,
-				 struct rgbled_board_info *board,
+				 struct rgbled_panel_info *panel,
 				 struct rgbled_coordinates *coord,
 				 struct rgbled_pixel *pix)
 {
 	struct rgbled_pixel *vpix;
 
 	/* get the pixel Value */
-	if (board->getPixelValue) {
-		return board->getPixelValue(rfb, board, coord, pix);
+	if (panel->getPixelValue) {
+		return panel->getPixelValue(rfb, panel, coord, pix);
 	} else {
 		if (rfb->getPixelValue)
-			return rfb->getPixelValue(rfb, board, coord, pix);
+			return rfb->getPixelValue(rfb, panel, coord, pix);
 	}
 
 	/* the default implementation */
 	if (coord->x > rfb->width)
-		return 	rgbled_getPixelValue_set(rfb, board, pix, 0, 0, 0, 0);
+		return 	rgbled_getPixelValue_set(rfb, panel, pix, 0, 0, 0, 0);
 	if (coord->y > rfb->height)
-		return 	rgbled_getPixelValue_set(rfb, board, pix, 0, 0, 0, 0);
+		return 	rgbled_getPixelValue_set(rfb, panel, pix, 0, 0, 0, 0);
 
 	/* copy pixel data */
 	vpix = rgbled_getPixel(rfb, coord);
 
-	rgbled_getPixelValue_set(rfb, board, pix,
+	rgbled_getPixelValue_set(rfb, panel, pix,
 				 vpix->red, vpix->green, vpix->blue,
 				 vpix->brightness);
 }
 
-static u8 rgbled_handle_board(struct rgbled_fb *rfb,
+static u8 rgbled_handle_panel(struct rgbled_fb *rfb,
 			      int start_pixel,
-			      struct rgbled_board_info *board)
+			      struct rgbled_panel_info *panel)
 {
 	struct rgbled_coordinates coord;
 	struct rgbled_pixel pix;
 	int i;
-	u32 c = 0;
-	/* can't name it current because of a macro
-	 * defined in include/asm-generic/current.h */
+	u64 c = 0; /* current - need 64bit temporarily because of scaling */
 
-	for(i=0; i< board->pixel; i++) {
+	/* iterate over all pixel */
+	for(i=0; i< panel->pixel; i++) {
 		/* get the coordinates */
-		if (board->getPixelCoords)
-			board->getPixelCoords(rfb, board, i, &coord);
+		if (panel->getPixelCoords)
+			panel->getPixelCoords(rfb, panel, i, &coord);
 		else
-			rgbled_getPixelCoords_linear(rfb, board, i, &coord);
+			rgbled_getPixelCoords_linear(rfb, panel, i, &coord);
 		/* now get the corresponding value */
-		rgbled_getPixelValue(rfb, board, &coord, &pix);
+		rgbled_getPixelValue(rfb, panel, &coord, &pix);
 
 		/* here we could add gamma control if needed */
 
 		/* and set it */
-		rfb->setPixelValue(rfb, board, start_pixel + i, &pix);
+		rfb->setPixelValue(rfb, panel, start_pixel + i, &pix);
 
 		/* and calculate current estimate */
-		c += pix.red   * pix.brightness * rfb->max_current_red;
-		c += pix.green * pix.brightness * rfb->max_current_green;
-		c += pix.blue  * pix.brightness * rfb->max_current_blue;
+		c += pix.red   * pix.brightness * rfb->led_current_max_red;
+		c += pix.green * pix.brightness * rfb->led_current_max_green;
+		c += pix.blue  * pix.brightness * rfb->led_current_max_blue;
 	}
-	/* and scale down */
-	c /= 255*255;
+	/* and scale down back */
+	do_div(c, 255 * 255);
 
-	board->current_current_tmp = c;
+	/* add base panel-consumption (after scaling!)*/
+	c += rfb->led_current_base * panel->pixel;
+
+	/* and assign/add it */
+	panel->current_current_tmp = c;
 	rfb->current_current_tmp += c;
 
-	if (!board->current_limit)
+	/* return 255 for a "constant scale" - not rescaling */
+	if (!panel->current_limit)
 		return 255;
-	if (board->current_limit >= c)
+	if (panel->current_limit >= c)
 		return 255;
 
+	/* so we exceed the limit, so warn */
 	fb_warn(rfb->info,
-		"board %s consumes %i mA and exceeded current limit of %i mA\n",
-		board->name, c, board->current_limit);
+		"panel %s consumes %llu mA and exceeded current limit of %i mA\n",
+		panel->name, c, panel->current_limit);
 
-	/* return a different scale */
-	return  (u32)254 * board->current_limit / c;
+	/* and return a different scale */
+	return  (u32)254 * panel->current_limit / (u32)c;
 }
 
-static u8 rgbled_handle_boards(struct rgbled_fb *rfb)
+static u8 rgbled_handle_panels(struct rgbled_fb *rfb)
 {
-	struct rgbled_board_info *board;
+	struct rgbled_panel_info *panel;
 	int start_pixel = 0;
 	u8 rescale;
 
 	/* reset current estimation */
 	rfb->current_current_tmp = 0;
 
-	/* iterate over all boards */
-	list_for_each_entry(board, &rfb->boards, list) {
-		rescale = rgbled_handle_board(rfb, start_pixel, board);
+	/* iterate over all panels */
+	list_for_each_entry(panel, &rfb->panels, list) {
+		rescale = rgbled_handle_panel(rfb, start_pixel, panel);
 		/* handle rescale request by propagating */
 		if (rescale != 255)
 			return rescale;
-		start_pixel += board->pixel;
+		start_pixel += panel->pixel;
 	}
 
 	/* check current */
@@ -320,15 +325,15 @@ static u8 rgbled_handle_boards(struct rgbled_fb *rfb)
 
 static void rgbled_update_stats(struct rgbled_fb *rfb)
 {
-	struct rgbled_board_info *board;
+	struct rgbled_panel_info *panel;
 
 	spin_lock(&rfb->lock);
 
 	/* commit currents */
-	list_for_each_entry(board, &rfb->boards, list) {
-		board->current_current = board->current_current_tmp;
-		if (board->current_current > board->current_max)
-			board->current_max = board->current_current;
+	list_for_each_entry(panel, &rfb->panels, list) {
+		panel->current_current = panel->current_current_tmp;
+		if (panel->current_current > panel->current_max)
+			panel->current_max = panel->current_current;
 	}
 	rfb->current_current = rfb->current_current_tmp;
 	if (rfb->current_current > rfb->current_max)
@@ -342,14 +347,14 @@ static void rgbled_update_stats(struct rgbled_fb *rfb)
 static void rgbled_deferred_io_default(struct rgbled_fb *rfb)
 {
 	int iterations = 0;
-	u8 rescale = rgbled_handle_boards(rfb);
+	u8 rescale = rgbled_handle_panels(rfb);
 
 	/* rescale the global brightness */
 	while(rescale < 255) {
 		/* change brightness */
 		rfb->brightness = rfb->brightness * rescale / 255;
 		/* and rerun the calculation */
-		rescale = rgbled_handle_boards(rfb);
+		rescale = rgbled_handle_panels(rfb);
 		/* and exit early after a few loops */
 		iterations++;
 		if (iterations > 256) {
@@ -378,20 +383,20 @@ static void rgbled_deferred_io(struct fb_info *fb,
 		rgbled_deferred_io_default(rfb);
 }
 
-static inline struct rgbled_board_info *to_board_info(
+static inline struct rgbled_panel_info *to_panel_info(
 	struct list_head *list)
 {
-	return list ? container_of(list, struct rgbled_board_info, list) :
+	return list ? container_of(list, struct rgbled_panel_info, list) :
 		NULL;
 }
 
-static int rgbled_board_info_cmp(void *priv,
+static int rgbled_panel_info_cmp(void *priv,
 			   struct list_head *a,
 			   struct list_head *b)
 {
 	struct rgbled_fb *rfb = priv;
-	struct rgbled_board_info *ad = to_board_info(a);
-	struct rgbled_board_info *bd = to_board_info(b);
+	struct rgbled_panel_info *ad = to_panel_info(a);
+	struct rgbled_panel_info *bd = to_panel_info(b);
 
 	if (ad->id < bd->id)
 		return -1;
@@ -403,39 +408,39 @@ static int rgbled_board_info_cmp(void *priv,
 	return 0;
 }
 
-int rgbled_board_multiple_width(struct rgbled_board_info *board, u32 val)
+int rgbled_panel_multiple_width(struct rgbled_panel_info *panel, u32 val)
 {
-	board->width *= val;
-	board->pixel *= val;
+	panel->width *= val;
+	panel->pixel *= val;
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(rgbled_board_multiple_width);
+EXPORT_SYMBOL_GPL(rgbled_panel_multiple_width);
 
-int rgbled_board_multiple_height(struct rgbled_board_info *board, u32 val)
+int rgbled_panel_multiple_height(struct rgbled_panel_info *panel, u32 val)
 {
-	board->height *= val;
-	board->pixel *= val;
+	panel->height *= val;
+	panel->pixel *= val;
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(rgbled_board_multiple_height);
+EXPORT_SYMBOL_GPL(rgbled_panel_multiple_height);
 
-int rgbled_scan_boards(struct rgbled_fb *rfb,
-		       struct rgbled_board_info *boards)
+int rgbled_scan_panels(struct rgbled_fb *rfb,
+		       struct rgbled_panel_info *panels)
 {
 	struct device *dev = rfb->info->device;
 	int err;
 
-	/* scan for boards in device tree */
-	err = rgbled_scan_boards_of(rfb, boards);
+	/* scan for panels in device tree */
+	err = rgbled_scan_panels_of(rfb, panels);
 	if (err)
 		return err;
 
 	/* sort list - used to shift out the data
 	 * this also checks that there are no duplicate ids...
 	 */
-	list_sort(rfb, &rfb->boards, rgbled_board_info_cmp);
+	list_sort(rfb, &rfb->panels, rgbled_panel_info_cmp);
 
 	/* if we got a duplicate, then fail */
 	if (rfb->duplicate_id) {
@@ -471,7 +476,7 @@ static void rgbled_framebuffer_release(struct device *dev, void *res)
 
 struct rgbled_fb *rgbled_alloc(struct device *dev,
 			       const char *name,
-			       struct rgbled_board_info *boards)
+			       struct rgbled_panel_info *panels)
 {
 	struct fb_info *fb;
 	struct rgbled_fb *rfb;
@@ -487,7 +492,7 @@ struct rgbled_fb *rgbled_alloc(struct device *dev,
 	       sizeof(fb_deferred_io_default));
 
 	/* now set up specific things */
-	INIT_LIST_HEAD(&rfb->boards);
+	INIT_LIST_HEAD(&rfb->panels);
 	spin_lock_init(&rfb->lock);
 
 	/* now allocate the framebuffer_info via devres */
@@ -517,8 +522,8 @@ struct rgbled_fb *rgbled_alloc(struct device *dev,
 	/* needs to happen agfter the assignement above */
 	strncpy(fb->fix.id, name, sizeof(fb->fix.id));
 
-	/* scan boards to get string size */
-	err = rgbled_scan_boards(rfb, boards);
+	/* scan panels to get string size */
+	err = rgbled_scan_panels(rfb, panels);
 	if (err)
 		return ERR_PTR(err);
 
@@ -587,8 +592,8 @@ int rgbled_register(struct rgbled_fb *rfb)
 	if (err)
 		return err;
 
-	/* and register boards */
-	rgbled_register_boards(rfb);
+	/* and register panels */
+	rgbled_register_panels(rfb);
 
 	/* and start an initial update of the framebuffer to clean it */
 	rgbled_deferred_io_default(rfb);

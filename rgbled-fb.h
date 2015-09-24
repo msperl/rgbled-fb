@@ -48,13 +48,13 @@ struct rgbled_coordinates {
 	int			y;
 };
 
-struct rgbled_board_info;
+struct rgbled_panel_info;
 
 struct rgbled_fb {
 	struct fb_info		*info;
 	struct fb_deferred_io	deferred_io;
 
-	struct list_head	boards;
+	struct list_head	panels;
 	spinlock_t		lock;
 	void			*par;
 	const char		*name;
@@ -72,30 +72,35 @@ struct rgbled_fb {
 	void (*finish_work)(struct rgbled_fb*);
 
 	void (*setPixelValue)(struct rgbled_fb *rfb,
-			      struct rgbled_board_info *board,
+			      struct rgbled_panel_info *panel,
 			      int pixel_num,
 			      struct rgbled_pixel *pix);
 	void (*getPixelValue)(struct rgbled_fb *rfb,
-			      struct rgbled_board_info *board,
+			      struct rgbled_panel_info *panel,
 			      struct rgbled_coordinates * coord,
 			      struct rgbled_pixel *pix);
 
-	/* current estimates */
+	/* current estimates in mA */
 	u32			current_limit;
 	u32			current_current;
 	u32			current_current_tmp;
 	u32			current_max;
 
-	u32			max_current_red;
-	u32			max_current_green;
-	u32			max_current_blue;
+	/* current consumption when idle */
+	u32			led_current_base;
+	/* current estimates for full brightness pixel */
+	u32			led_current_max_red;
+	u32			led_current_max_green;
+	u32			led_current_max_blue;
 
+	/* global brightness */
 	u8			brightness;
 
+	/* count of screen updates */
 	u32			screen_updates;
 };
 
-struct rgbled_board_info {
+struct rgbled_panel_info {
 	const char     		*compatible;
 	const char		*name;
 	u32			id;
@@ -122,14 +127,14 @@ struct rgbled_board_info {
 #define RGBLED_FLAG_CHANGE_WHLP  	(RGBLED_FLAG_CHANGE_WHL |    \
 					 RGBLED_FLAG_CHANGE_PITCH)
 
-	int (*multiple)(struct rgbled_board_info *board, u32 val);
+	int (*multiple)(struct rgbled_panel_info *panel, u32 val);
 
 	void (*getPixelCoords)(struct rgbled_fb *rfb,
-			       struct rgbled_board_info *board,
+			       struct rgbled_panel_info *panel,
 			       int pixel_num,
 			       struct rgbled_coordinates *coord);
 	void (*getPixelValue)(struct rgbled_fb *rfb,
-			      struct rgbled_board_info *board,
+			      struct rgbled_panel_info *panel,
 			      struct rgbled_coordinates * coord,
 			      struct rgbled_pixel *pix);
 
@@ -146,34 +151,34 @@ struct rgbled_board_info {
 	struct list_head 	list;
 };
 
-extern int rgbled_board_multiple_width(struct rgbled_board_info *board, u32 val);
-extern int rgbled_board_multiple_height(struct rgbled_board_info *board, u32 val);
+extern int rgbled_panel_multiple_width(struct rgbled_panel_info *panel, u32 val);
+extern int rgbled_panel_multiple_height(struct rgbled_panel_info *panel, u32 val);
 
 /* typical pixel handler */
 extern void rgbled_getPixelCoords_linear(
 		struct rgbled_fb *rfb,
-		struct rgbled_board_info *board,
+		struct rgbled_panel_info *panel,
 		int pixel_num,
 		struct rgbled_coordinates *coord);
 
 extern void rgbled_getPixelCoords_meander(
 		struct rgbled_fb *rfb,
-		struct rgbled_board_info *board,
+		struct rgbled_panel_info *panel,
 		int pixel_num,
 		struct rgbled_coordinates *coord);
 
 extern struct rgbled_fb *rgbled_alloc(struct device *dev,
 				      const char *name,
-				      struct rgbled_board_info *boards);
+				      struct rgbled_panel_info *panels);
 extern int rgbled_register(struct rgbled_fb *fb);
 
 
 /* mostly internal functions - not exported */
 extern int rgbled_register_of(struct rgbled_fb *rfb);
-extern int rgbled_scan_boards_of(struct rgbled_fb *rfb,
-				 struct rgbled_board_info *boards);
+extern int rgbled_scan_panels_of(struct rgbled_fb *rfb,
+				 struct rgbled_panel_info *panels);
 extern int rgbled_register_sysfs(struct rgbled_fb *rfb);
-extern int rgbled_register_boards(struct rgbled_fb *rfb);
+extern int rgbled_register_panels(struct rgbled_fb *rfb);
 extern struct rgbled_pixel *rgbled_getPixel(struct rgbled_fb *rfb,
 					    struct rgbled_coordinates *coord);
 

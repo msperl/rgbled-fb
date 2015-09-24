@@ -52,7 +52,7 @@ struct apa102_data {
 };
 
 /* define the different FB types */
-struct rgbled_board_info apa102_boards[] = {
+struct rgbled_panel_info apa102_panels[] = {
 	{
 		.compatible	= "shiji-led,apa102,strip",
 		.width		= 1,
@@ -106,7 +106,7 @@ struct rgbled_board_info apa102_boards[] = {
 };
 
 static void apa102_setPixelValue(struct rgbled_fb *rfb,
-				struct rgbled_board_info *board,
+				struct rgbled_panel_info *panel,
 				int pixel_num,
 				struct rgbled_pixel *pix)
 {
@@ -136,7 +136,7 @@ static int apa102_probe(struct spi_device *spi)
 	if (!bs)
 		return -ENOMEM;
 
-	bs->rgbled_fb = rgbled_alloc(&spi->dev, DEVICE_NAME, apa102_boards);
+	bs->rgbled_fb = rgbled_alloc(&spi->dev, DEVICE_NAME, apa102_panels);
 	if (!bs->rgbled_fb)
 		return -ENOMEM;
 	if (IS_ERR(bs->rgbled_fb))

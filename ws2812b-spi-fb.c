@@ -86,11 +86,12 @@ struct ws2812b_pixel {
 /* generic information about this device */
 struct ws2812b_device_info {
 	char *name;
-	struct rgbled_board_info* boards;
+	struct rgbled_panel_info* panels;
 	int clock_speed;
-	u32 max_current_red;
-	u32 max_current_green;
-	u32 max_current_blue;
+	u32 led_current_max_red;
+	u32 led_current_max_green;
+	u32 led_current_max_blue;
+	u32 led_current_base;
 };
 
 /* the private data structure for this device */
@@ -113,7 +114,7 @@ static inline void ws2812b_setEncodedPixel(struct ws2812b_encoding *enc, u8 val)
 }
 
 static void ws2812b_setPixelValue(struct rgbled_fb *rfb,
-				  struct rgbled_board_info *board,
+				  struct rgbled_panel_info *panel,
 				  int pixel_num,
 				  struct rgbled_pixel *pix)
 {
@@ -145,7 +146,7 @@ static int ws2812b_probe(struct spi_device *spi)
 	const struct ws2812b_device_info *dinfo;
 	struct rgbled_fb* rfb;
 
-	/* get the boards for this board */
+	/* get the panels for this panel */
 	of_id = of_match_device(ws2812b_of_match, &spi->dev);
 	if (!of_id)
 		return -EINVAL;
@@ -156,7 +157,7 @@ static int ws2812b_probe(struct spi_device *spi)
 	if (!bs)
 		return -ENOMEM;
 
-	rfb = rgbled_alloc(&spi->dev, dinfo->name, dinfo->boards);
+	rfb = rgbled_alloc(&spi->dev, dinfo->name, dinfo->panels);
 	bs->rgbled_fb = rfb;
 	if (!rfb)
 		return -ENOMEM;
@@ -185,9 +186,10 @@ static int ws2812b_probe(struct spi_device *spi)
 	rfb->finish_work = ws2812b_finish_work;
 
 	/* copy the current values */
-	rfb->max_current_red = dinfo->max_current_red;
-	rfb->max_current_green = dinfo->max_current_green;
-	rfb->max_current_blue = dinfo->max_current_blue;
+	rfb->led_current_max_red = dinfo->led_current_max_red;
+	rfb->led_current_max_green = dinfo->led_current_max_green;
+	rfb->led_current_max_blue = dinfo->led_current_max_blue;
+	rfb->led_current_base = dinfo->led_current_base;
 
 	/* set the reverse pointer */
 	rfb->par = bs;
@@ -196,8 +198,8 @@ static int ws2812b_probe(struct spi_device *spi)
 	return rgbled_register(rfb);
 }
 
-/* define the different board types for the ws2812b chip*/
-static struct rgbled_board_info ws2812b_boards[] = {
+/* define the different panel types for the ws2812b chip*/
+static struct rgbled_panel_info ws2812b_panels[] = {
 	{
 		.compatible	= "worldsemi,ws2812b,strip",
 		.width		= 1,
@@ -274,7 +276,7 @@ static struct rgbled_board_info ws2812b_boards[] = {
 		.height		= 8,
 		.getPixelCoords	= rgbled_getPixelCoords_meander,
 		.pitch		= 112,
-		.multiple	= rgbled_board_multiple_height,
+		.multiple	= rgbled_panel_multiple_height,
 	},
 	{
 		.compatible	= "adafruit,neopixel,matrix,16x16",
@@ -282,7 +284,7 @@ static struct rgbled_board_info ws2812b_boards[] = {
 		.height		= 16,
 		.getPixelCoords	= rgbled_getPixelCoords_meander,
 		.pitch		= 112,
-		.multiple	= rgbled_board_multiple_height,
+		.multiple	= rgbled_panel_multiple_height,
 	},
 	{
 		.compatible	= "adafruit,neopixel,matrix,32x8",
@@ -292,29 +294,30 @@ static struct rgbled_board_info ws2812b_boards[] = {
 		.getPixelCoords	= rgbled_getPixelCoords_meander,
 		.layout_yx	= true,
 		.pitch		= 112,
-		.multiple	= rgbled_board_multiple_width,
+		.multiple	= rgbled_panel_multiple_width,
 	},
 	{
 		.compatible	= "adafruit,neopixel,stick,8",
 		.width		= 8,
 		.height		= 1,
 		.pitch		= 156,
-		.multiple	= rgbled_board_multiple_height,
+		.multiple	= rgbled_panel_multiple_height,
 	},
 	{ }
 };
 
 static struct ws2812b_device_info ws2812b_device_info = {
 	.name			= "ws2812b-spi-fb",
-	.boards			= ws2812b_boards,
+	.panels			= ws2812b_panels,
 	.clock_speed		= 800000,
-	.max_current_red	= 15,
-	.max_current_green	= 15,
-	.max_current_blue	= 15,
+	.led_current_max_red	= 17,
+	.led_current_max_green	= 17,
+	.led_current_max_blue	= 17,
+	.led_current_base	= 1,
 };
 
-/* define the different board types for the ws2812b chip*/
-static struct rgbled_board_info ws2812_boards[] = {
+/* define the different panel types for the ws2812b chip*/
+static struct rgbled_panel_info ws2812_panels[] = {
 	{
 		.compatible	= "worldsemi,ws2812,strip",
 		.width		= 1,
@@ -325,11 +328,12 @@ static struct rgbled_board_info ws2812_boards[] = {
 
 static struct ws2812b_device_info ws2812_device_info = {
 	.name			= "ws2812-spi-fb",
-	.boards			= ws2812_boards,
+	.panels			= ws2812_panels,
 	.clock_speed		= 400000,
-	.max_current_red	= 15,
-	.max_current_green	= 15,
-	.max_current_blue	= 15,
+	.led_current_max_red	= 17,
+	.led_current_max_green	= 17,
+	.led_current_max_blue	= 17,
+	.led_current_base	= 1,
 };
 
 /* define the match table */

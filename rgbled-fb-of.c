@@ -29,12 +29,12 @@
 
 #include "rgbled-fb.h"
 
-static int rgbled_probe_of_board(struct rgbled_fb *rfb,
+static int rgbled_probe_of_panel(struct rgbled_fb *rfb,
 				struct device_node *nc,
-				struct rgbled_board_info *board)
+				struct rgbled_panel_info *panel)
 {
 	struct device *dev = rfb->info->device;
-	struct rgbled_board_info *bi;
+	struct rgbled_panel_info *bi;
 	u32 tmp;
 	char *prop;
 	int err;
@@ -43,11 +43,11 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 	if (!bi)
 		return -ENOMEM;
 
-	/* copy the default board data */
-	memcpy(bi, board, sizeof(*bi));
+	/* copy the default panel data */
+	memcpy(bi, panel, sizeof(*bi));
 
 	/* add to list */
-	list_add(&bi->list, &rfb->boards);
+	list_add(&bi->list, &rfb->panels);
 
 	/* copy the full name (including @...) */
 	bi->name = nc->kobj.name;
@@ -137,7 +137,7 @@ static int rgbled_probe_of_board(struct rgbled_fb *rfb,
 	else
 		bi->brightness = 255;
 
-	/* calculate size of board in pixel if not set */
+	/* calculate size of panel in pixel if not set */
 	if (!bi->pixel)
 		bi->pixel = bi->width * bi->height;
 
@@ -167,21 +167,21 @@ parse_error:
 	return -EINVAL;
 }
 
-int rgbled_scan_boards_match(struct rgbled_fb *rfb,
+int rgbled_scan_panels_match(struct rgbled_fb *rfb,
 			     struct device_node *nc,
-			     struct rgbled_board_info *boards)
+			     struct rgbled_panel_info *panels)
 {
 	struct device *dev = rfb->info->device;
 	int i;
 	int idx;
 
 	/* get the compatible property */
-	for(i = 0 ; boards[i].compatible ; i++) {
+	for(i = 0 ; panels[i].compatible ; i++) {
 		idx = of_property_match_string(nc, "compatible",
-					boards[i].compatible);
+					panels[i].compatible);
 		if (idx >= 0) {
-			return rgbled_probe_of_board(rfb, nc,
-						     &boards[i]);
+			return rgbled_probe_of_panel(rfb, nc,
+						     &panels[i]);
 		}
 	}
 
@@ -190,8 +190,8 @@ int rgbled_scan_boards_match(struct rgbled_fb *rfb,
 	return -EINVAL;
 }
 
-int rgbled_scan_boards_of(struct rgbled_fb *rfb,
-			  struct rgbled_board_info *boards)
+int rgbled_scan_panels_of(struct rgbled_fb *rfb,
+			  struct rgbled_panel_info *panels)
 {
 	struct device_node *nc;
 	struct device *dev = rfb->info->device;
@@ -199,7 +199,7 @@ int rgbled_scan_boards_of(struct rgbled_fb *rfb,
 
 	/* iterate over all entries in the device-tree */
 	for_each_available_child_of_node(dev->of_node, nc) {
-		err = rgbled_scan_boards_match(rfb, nc, boards) ;
+		err = rgbled_scan_panels_match(rfb, nc, panels) ;
 		if (err) {
 			of_node_put(nc);
 			return err;
@@ -223,12 +223,14 @@ int rgbled_register_of(struct rgbled_fb *rfb)
 	/* read brightness and current limits from device-tree */
 	of_property_read_u32_index(nc, "current-limit",
 				   0, &rfb->current_limit);
-	of_property_read_u32_index(nc, "max-current-red",
-				   0, &rfb->max_current_red);
-	of_property_read_u32_index(nc, "max-current-green",
-				   0, &rfb->max_current_green);
-	of_property_read_u32_index(nc, "max-current-blue",
-				   0, &rfb->max_current_blue);
+	of_property_read_u32_index(nc, "led-current-max-red",
+				   0, &rfb->led_current_max_red);
+	of_property_read_u32_index(nc, "led-current-max-green",
+				   0, &rfb->led_current_max_green);
+	of_property_read_u32_index(nc, "led-current-max-blue",
+				   0, &rfb->led_current_max_blue);
+	of_property_read_u32_index(nc, "led-current-base",
+				   0, &rfb->led_current_base);
 
 	if (!of_property_read_u32_index(nc, "brightness",0, &tmp))
 		rfb->brightness = min_t(u32, tmp, 255);

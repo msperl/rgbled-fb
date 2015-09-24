@@ -30,7 +30,7 @@
 
 #include "rgbled-fb.h"
 
-static int rgbled_register_sysfs_boards(struct rgbled_fb *rfb)
+static int rgbled_register_sysfs_panels(struct rgbled_fb *rfb)
 {
 	return 0;
 }
@@ -92,9 +92,10 @@ SYSFS_HELPER_RW(brightness, brightness, 255);
 SYSFS_HELPER_RO(current, current_current);
 SYSFS_HELPER_RO(current_max, current_max);
 SYSFS_HELPER_RW(current_limit, current_limit, 100000000);
-SYSFS_HELPER_RW(led_max_current_red, max_current_red, 10000);
-SYSFS_HELPER_RW(led_max_current_green, max_current_green, 10000);
-SYSFS_HELPER_RW(led_max_current_blue, max_current_blue, 10000);
+SYSFS_HELPER_RW(led_current_max_red, led_current_max_red, 10000);
+SYSFS_HELPER_RW(led_current_max_green, led_current_max_green, 10000);
+SYSFS_HELPER_RW(led_current_max_blue, led_current_max_blue, 10000);
+SYSFS_HELPER_RW(led_current_base, led_current_base, 10000);
 SYSFS_HELPER_RO(led_count, pixel);
 SYSFS_HELPER_RO(updates, screen_updates);
 
@@ -103,9 +104,10 @@ static struct device_attribute *device_attrs[] = {
 	&dev_attr_current,
 	&dev_attr_current_max,
 	&dev_attr_current_limit,
-	&dev_attr_led_max_current_red,
-	&dev_attr_led_max_current_green,
-	&dev_attr_led_max_current_blue,
+	&dev_attr_led_current_max_red,
+	&dev_attr_led_current_max_green,
+	&dev_attr_led_current_max_blue,
+	&dev_attr_led_current_base,
 	&dev_attr_led_count,
 	&dev_attr_updates,
 };
@@ -116,8 +118,8 @@ int rgbled_register_sysfs(struct rgbled_fb *rfb)
 	int i;
 	int err = 0;
 
-	/* register boards */
-	err = rgbled_register_sysfs_boards(rfb);
+	/* register panels */
+	err = rgbled_register_sysfs_panels(rfb);
 	if (err)
 		return err;
 
@@ -210,7 +212,7 @@ static enum led_brightness rgbled_brightness_get(struct led_classdev *led_cdev)
 }
 
 static int rgbled_register_single_led(struct rgbled_fb *rfb,
-				      struct rgbled_board_info *board,
+				      struct rgbled_panel_info *panel,
 				      const char *label,
 				      struct rgbled_coordinates *coord,
 				      enum rgbled_pixeltype type,
@@ -256,8 +258,8 @@ static int rgbled_register_single_led(struct rgbled_fb *rfb,
 	return 0;
 }
 
-static int rgbled_register_board_led_single(struct rgbled_fb *rfb,
-					    struct rgbled_board_info *board,
+static int rgbled_register_panel_led_single(struct rgbled_fb *rfb,
+					    struct rgbled_panel_info *panel,
 					    struct device_node *nc)
 {
 	struct fb_info * fb = rfb->info;
@@ -300,17 +302,17 @@ static int rgbled_register_board_led_single(struct rgbled_fb *rfb,
 	case 1: /* 1d approach */
 		/* no error checking needed */
 		of_property_read_u32_index(nc, "reg", 0, &pix);
-		if (pix >= board->pixel) {
+		if (pix >= panel->pixel) {
 			fb_err(fb, "reg value %i is out of range in %s\n",
 				pix, nc->name);
 			return -EINVAL;
 		}
 		/* translate coordinates */
-		if (board->getPixelCoords)
-			board->getPixelCoords(rfb, board,
+		if (panel->getPixelCoords)
+			panel->getPixelCoords(rfb, panel,
 						pix, &coord);
 		else
-			rgbled_getPixelCoords_linear(rfb,board,
+			rgbled_getPixelCoords_linear(rfb,panel,
 						     pix, &coord);
 		break;
 	case 2: /* need to handle the 2d case */
@@ -334,30 +336,30 @@ static int rgbled_register_board_led_single(struct rgbled_fb *rfb,
 	of_property_read_string(nc, "linux,default-trigger", &trigger);
 
 	/* and now register it for real */
-	return rgbled_register_single_led(rfb, board,
+	return rgbled_register_single_led(rfb, panel,
 					  label, &coord,
 					  channel, trigger);
 }
 
-static int rgbled_register_board_led_all(struct rgbled_fb *rfb,
-					 struct rgbled_board_info *board)
+static int rgbled_register_panel_led_all(struct rgbled_fb *rfb,
+					 struct rgbled_panel_info *panel)
 {
 	int i, err;
 	char label[32];
 	struct rgbled_coordinates coord;
 
-	for(i=0; i < board->pixel; i++) {
+	for(i=0; i < panel->pixel; i++) {
 		/* translate coordinates */
-		if (board->getPixelCoords)
-			board->getPixelCoords(rfb, board,
+		if (panel->getPixelCoords)
+			panel->getPixelCoords(rfb, panel,
 					i, &coord);
 		else
-			rgbled_getPixelCoords_linear(rfb,board,
+			rgbled_getPixelCoords_linear(rfb,panel,
 						     i, &coord);
 		/* now register the individual led components */
 		snprintf(label, sizeof(label), "%s:%i:%i:red",
 			 rfb->name, coord.x, coord.y);
-		err = rgbled_register_single_led(rfb, board, label, &coord,
+		err = rgbled_register_single_led(rfb, panel, label, &coord,
 						 rgbled_pixeltype_red,
 					         NULL);
 		if (err)
@@ -365,7 +367,7 @@ static int rgbled_register_board_led_all(struct rgbled_fb *rfb,
 
 		snprintf(label, sizeof(label), "%s:%i:%i:green",
 			 rfb->name, coord.x, coord.y);
-		err = rgbled_register_single_led(rfb, board, label, &coord,
+		err = rgbled_register_single_led(rfb, panel, label, &coord,
 						 rgbled_pixeltype_green,
 						 NULL);
 		if (err)
@@ -373,7 +375,7 @@ static int rgbled_register_board_led_all(struct rgbled_fb *rfb,
 
 		snprintf(label, sizeof(label), "%s:%i:%i:blue",
 			 rfb->name, coord.x, coord.y);
-		err = rgbled_register_single_led(rfb, board, label, &coord,
+		err = rgbled_register_single_led(rfb, panel, label, &coord,
 						 rgbled_pixeltype_blue,
 						 NULL);
 		if (err)
@@ -381,7 +383,7 @@ static int rgbled_register_board_led_all(struct rgbled_fb *rfb,
 
 		snprintf(label, sizeof(label), "%s:%i:%i:brightness",
 			 rfb->name, coord.x, coord.y);
-		err = rgbled_register_single_led(rfb, board, label, &coord,
+		err = rgbled_register_single_led(rfb, panel, label, &coord,
 						 rgbled_pixeltype_brightness,
 						 NULL);
 		if (err)
@@ -391,17 +393,17 @@ static int rgbled_register_board_led_all(struct rgbled_fb *rfb,
 	return 0;
 }
 
-static int rgbled_register_board_led(struct rgbled_fb *rfb,
-				     struct rgbled_board_info *board)
+static int rgbled_register_panel_led(struct rgbled_fb *rfb,
+				     struct rgbled_panel_info *panel)
 {
 	struct device_node *rnc = rfb->of_node;
-	struct device_node *bnc = board->of_node;
+	struct device_node *bnc = panel->of_node;
 	struct device_node *nc;
 	int err = 0;
 
 	/* iterate all defined */
 	for_each_available_child_of_node(bnc, nc) {
-		err = rgbled_register_board_led_single(rfb, board, nc);
+		err = rgbled_register_panel_led_single(rfb, panel, nc);
 		if (err) {
 			of_node_put(nc);
 			return err;
@@ -411,19 +413,19 @@ static int rgbled_register_board_led(struct rgbled_fb *rfb,
 	/* if we are defined then expose all */
 	if (of_find_property(rnc, "linux,expose-all-led", NULL) ||
 	    of_find_property(bnc, "linux,expose-all-led", NULL))
-		err = rgbled_register_board_led_all(rfb, board);
+		err = rgbled_register_panel_led_all(rfb, panel);
 
 	return err;
 }
 
-int rgbled_register_boards(struct rgbled_fb *rfb)
+int rgbled_register_panels(struct rgbled_fb *rfb)
 {
-	struct rgbled_board_info *board;
+	struct rgbled_panel_info *panel;
 	int err;
 
-	/* register each in each board - if given */
-	list_for_each_entry(board, &rfb->boards, list) {
-		err = rgbled_register_board_led(rfb, board);
+	/* register each in each panel - if given */
+	list_for_each_entry(panel, &rfb->panels, list) {
+		err = rgbled_register_panel_led(rfb, panel);
 		if (err)
 			return err;
 	}
