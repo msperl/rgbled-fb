@@ -194,41 +194,25 @@ static inline void rgbled_getPixelValue_set(struct rgbled_fb *rfb,
 		255 / 255;
 }
 
-struct rgbled_pixel *rgbled_getPixel(struct rgbled_fb *rfb,
-				     struct rgbled_coordinates *coord)
-{
-	struct rgbled_pixel *vpix_array = (struct rgbled_pixel *)rfb->vmem;
-
-	return &vpix_array[coord->y * rfb->width + coord->x];
-}
-
-static void rgbled_getPixelValue(struct rgbled_fb *rfb,
-				 struct rgbled_panel_info *panel,
-				 struct rgbled_coordinates *coord,
-				 struct rgbled_pixel *pix)
+static void rgbled_getPixelValue_default(struct rgbled_fb *rfb,
+					 struct rgbled_panel_info *panel,
+					 struct rgbled_coordinates *coord,
+					 struct rgbled_pixel *pix)
 {
 	struct rgbled_pixel *vpix;
 
-	/* get the pixel Value */
-	if (panel->getPixelValue) {
-		return panel->getPixelValue(rfb, panel, coord, pix);
-	} else {
-		if (rfb->getPixelValue)
-			return rfb->getPixelValue(rfb, panel, coord, pix);
-	}
-
-	/* the default implementation */
 	if (coord->x > rfb->width)
 		return 	rgbled_getPixelValue_set(rfb, panel, pix, 0, 0, 0, 0);
 	if (coord->y > rfb->height)
 		return 	rgbled_getPixelValue_set(rfb, panel, pix, 0, 0, 0, 0);
 
 	/* copy pixel data */
-	vpix = rgbled_getPixel(rfb, coord);
+	vpix = rgbled_getFBPixel(rfb, coord);
 
 	rgbled_getPixelValue_set(rfb, panel, pix,
 				 vpix->red, vpix->green, vpix->blue,
 				 vpix->brightness);
+
 }
 
 static u8 rgbled_handle_panel(struct rgbled_fb *rfb,
@@ -243,10 +227,7 @@ static u8 rgbled_handle_panel(struct rgbled_fb *rfb,
 	/* iterate over all pixel */
 	for(i=0; i< panel->pixel; i++) {
 		/* get the coordinates */
-		if (panel->getPixelCoords)
-			panel->getPixelCoords(rfb, panel, i, &coord);
-		else
-			rgbled_getPixelCoords_linear(rfb, panel, i, &coord);
+		rgbled_getPixelCoords(rfb, panel, i, &coord);
 		/* now get the corresponding value */
 		rgbled_getPixelValue(rfb, panel, &coord, &pix);
 
@@ -339,7 +320,7 @@ static void rgbled_update_stats(struct rgbled_fb *rfb)
 	spin_unlock(&rfb->lock);
 }
 
-static void rgbled_deferred_io_default(struct rgbled_fb *rfb)
+static void rgbled_deferred_work_default(struct rgbled_fb *rfb)
 {
 	int iterations = 0;
 	u8 rescale = rgbled_handle_panels(rfb);
@@ -372,10 +353,7 @@ static void rgbled_deferred_io(struct fb_info *fb,
 {
 	struct rgbled_fb *rfb = fb->par;
 
-	if (rfb->deferred_work)
-		rfb->deferred_work(rfb);
-	else
-		rgbled_deferred_io_default(rfb);
+	rfb->deferred_work(rfb);
 }
 
 static inline struct rgbled_panel_info *to_panel_info(
@@ -526,11 +504,47 @@ struct rgbled_fb *rgbled_alloc(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(rgbled_alloc);
 
+static int rgbled_fix_up_structures(struct rgbled_fb *rfb)
+{
+	struct rgbled_panel_info *p;
+
+	/* fill in those empty vectors */
+	if (!rfb->deferred_work) {
+		rfb->deferred_work = rgbled_deferred_work_default;
+		/* if there is no custom implementation,
+		 * then we need setPixelValue
+		 * finish_work is optional...
+		 */
+		if (!rfb->setPixelValue) {
+			fb_err(rfb->info, "no setPixelValue method configured\n");
+			return -EINVAL;
+		}
+	}
+
+	/* fill in those empty vectors with defaults */
+	if (!rfb->getPixelValue)
+		rfb->getPixelValue = rgbled_getPixelValue_default;
+
+	list_for_each_entry(p, &rfb->panels, list) {
+		if (!p->getPixelCoords)
+			p->getPixelCoords = rgbled_getPixelCoords_linear;
+		if (!p->getPixelValue)
+			p->getPixelValue = rfb->getPixelValue;
+	}
+
+	return 0;
+}
+
 int rgbled_register(struct rgbled_fb *rfb)
 {
 	struct fb_info *fb = rfb->info;
 	int err;
 	struct rgbled_fb **ptr;
+
+	/* fill in the default vectors */
+	err = rgbled_fix_up_structures(rfb);
+	if (err)
+		return err;
 
 	/* register devices via device-tree */
 	err = rgbled_register_of(rfb);
@@ -591,7 +605,7 @@ int rgbled_register(struct rgbled_fb *rfb)
 	rgbled_register_panels(rfb);
 
 	/* and start an initial update of the framebuffer to clean it */
-	rgbled_deferred_io_default(rfb);
+	rfb->deferred_work(rfb);
 
 	/* and report the status */
 	fb_info(fb, "%s of size %ux%u with %i led, max refresh %luHz\n",

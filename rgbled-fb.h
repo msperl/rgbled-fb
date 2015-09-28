@@ -256,6 +256,29 @@ struct rgbled_panel_info {
 extern int rgbled_panel_multiple_width(struct rgbled_panel_info *panel, u32 val);
 extern int rgbled_panel_multiple_height(struct rgbled_panel_info *panel, u32 val);
 
+static inline void rgbled_getPixelValue(struct rgbled_fb *rfb,
+					struct rgbled_panel_info *panel,
+					struct rgbled_coordinates *coord,
+					struct rgbled_pixel *pix)
+{
+	return panel->getPixelValue(rfb, panel, coord, pix);
+}
+
+static inline struct rgbled_pixel *rgbled_getFBPixel(
+	struct rgbled_fb *rfb,
+	struct rgbled_coordinates *coord)
+{
+	return &rfb->vmem[coord->y * rfb->width + coord->x];
+}
+
+static inline void rgbled_getPixelCoords(struct rgbled_fb *rfb,
+					 struct rgbled_panel_info *panel,
+					 int panel_pixel_num,
+					 struct rgbled_coordinates *coord)
+{
+	panel->getPixelCoords(rfb, panel, panel_pixel_num, coord);
+}
+
 /* typical pixel coordinate implementation for standard types */
 extern void rgbled_getPixelCoords_linear(
 		struct rgbled_fb *rfb,
@@ -295,8 +318,5 @@ extern int rgbled_scan_panels_of(struct rgbled_fb *rfb,
 extern int rgbled_register_sysfs(struct rgbled_fb *rfb);
 /* register the individual panels */
 extern int rgbled_register_panels(struct rgbled_fb *rfb);
-/* helper method to get the real pixel from the coordinates*/
-extern struct rgbled_pixel *rgbled_getPixel(struct rgbled_fb *rfb,
-					    struct rgbled_coordinates *coord);
 
 #endif /* __RGBLED_FB_H */

@@ -223,7 +223,7 @@ static int rgbled_register_single_led(struct rgbled_fb *rfb,
 	int err;
 
 	/* get the pixel */
-	vpix = rgbled_getPixel(rfb, coord);
+	vpix = rgbled_getFBPixel(rfb, coord);
 	if (!vpix)
 		return -EINVAL;
 
