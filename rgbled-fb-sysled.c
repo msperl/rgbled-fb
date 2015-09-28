@@ -89,7 +89,7 @@ static int rgbled_register_sysfs_panels(struct rgbled_fb *rfb)
 #undef current
 
 SYSFS_HELPER_RW(brightness, brightness, 255);
-SYSFS_HELPER_RO(current, current_current);
+SYSFS_HELPER_RO(current, current_active);
 SYSFS_HELPER_RO(current_max, current_max);
 SYSFS_HELPER_RW(current_limit, current_limit, 100000000);
 SYSFS_HELPER_RW(led_current_max_red, led_current_max_red, 10000);

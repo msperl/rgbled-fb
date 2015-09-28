@@ -75,11 +75,6 @@ static struct fb_deferred_io fb_deferred_io_default = {
 	.deferred_io	= rgbled_deferred_io,
 };
 
-void rgbled_schedule(struct fb_info *info)
-{
-        schedule_delayed_work(&info->deferred_work, 1);
-}
-
 /* framebuffer operations */
 
 static ssize_t rgbled_write(struct fb_info *info,
@@ -272,8 +267,8 @@ static u8 rgbled_handle_panel(struct rgbled_fb *rfb,
 	c += rfb->led_current_base * panel->pixel;
 
 	/* and assign/add it */
-	panel->current_current_tmp = c;
-	rfb->current_current_tmp += c;
+	panel->current_tmp = c;
+	rfb->current_tmp += c;
 
 	/* return 255 for a "constant scale" - not rescaling */
 	if (!panel->current_limit)
@@ -297,7 +292,7 @@ static u8 rgbled_handle_panels(struct rgbled_fb *rfb)
 	u8 rescale;
 
 	/* reset current estimation */
-	rfb->current_current_tmp = 0;
+	rfb->current_tmp = 0;
 
 	/* iterate over all panels */
 	list_for_each_entry(panel, &rfb->panels, list) {
@@ -311,16 +306,16 @@ static u8 rgbled_handle_panels(struct rgbled_fb *rfb)
 	/* check current */
 	if (!rfb->current_limit)
 		return 255;
-	if (rfb->current_limit >= rfb->current_current_tmp) {
+	if (rfb->current_limit >= rfb->current_tmp) {
 		return 255;
 	}
 
 	fb_warn(rfb->info,
 		"total panel consumes %i mA and exceeded current limit of %i mA\n",
-		rfb->current_current_tmp, rfb->current_limit);
+		rfb->current_tmp, rfb->current_limit);
 
 	/* need to return with new scaling */
-	return  (u32)254 * rfb->current_limit / rfb->current_current_tmp;
+	return  (u32)254 * rfb->current_limit / rfb->current_tmp;
 }
 
 static void rgbled_update_stats(struct rgbled_fb *rfb)
@@ -331,13 +326,13 @@ static void rgbled_update_stats(struct rgbled_fb *rfb)
 
 	/* commit currents */
 	list_for_each_entry(panel, &rfb->panels, list) {
-		panel->current_current = panel->current_current_tmp;
-		if (panel->current_current > panel->current_max)
-			panel->current_max = panel->current_current;
+		panel->current_active = panel->current_tmp;
+		if (panel->current_active > panel->current_max)
+			panel->current_max = panel->current_active;
 	}
-	rfb->current_current = rfb->current_current_tmp;
-	if (rfb->current_current > rfb->current_max)
-		rfb->current_max = rfb->current_current;
+	rfb->current_active = rfb->current_tmp;
+	if (rfb->current_active > rfb->current_max)
+		rfb->current_max = rfb->current_active;
 
 	rfb->screen_updates++;
 
@@ -567,8 +562,8 @@ int rgbled_register(struct rgbled_fb *rfb)
         fb->fix.smem_len = rfb->vmem_size;
 	fb->screen_size = rfb->vmem_size;
 
-	fb->screen_base = rfb->vmem;
-	fb->fix.smem_start = (typeof(fb->fix.smem_start))(rfb->vmem);
+	fb->screen_base = (typeof(fb->screen_base))rfb->vmem;
+	fb->fix.smem_start = (typeof(fb->fix.smem_start))rfb->vmem;
 
 	/* calculate refresh rate to use */
 	if (!rfb->deferred_io.delay)
