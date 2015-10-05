@@ -14,10 +14,6 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/device.h>
@@ -30,8 +26,8 @@
 #include "rgbled-fb.h"
 
 static int rgbled_probe_of_panel(struct rgbled_fb *rfb,
-				struct device_node *nc,
-				struct rgbled_panel_info *panel)
+				 struct device_node *nc,
+				 struct rgbled_panel_info *panel)
 {
 	struct device *dev = rfb->info->device;
 	struct rgbled_panel_info *bi;
@@ -63,30 +59,31 @@ static int rgbled_probe_of_panel(struct rgbled_fb *rfb,
 	of_property_read_u32_index(nc, "x",      0, &bi->x);
 	of_property_read_u32_index(nc, "y",      0, &bi->y);
 	prop = "layout-y-x";
-	if (of_find_property(nc, prop,0)) {
+	if (of_find_property(nc, prop, 0)) {
 		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
 			bi->layout_yx = true;
 		else
 			goto parse_error;
 	}
 	prop = "inverted-x";
-	if (of_find_property(nc, prop,0)) {
+	if (of_find_property(nc, prop, 0)) {
 		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
 			bi->inverted_x = true;
 		else
 			goto parse_error;
 	}
 	prop = "inverted-y";
-	if (of_find_property(nc, prop,0)) {
+	if (of_find_property(nc, prop, 0)) {
 		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
 			bi->inverted_y = true;
 		else
 			goto parse_error;
 	}
 	prop = "meander";
-	if (of_find_property(nc, prop,0)) {
+	if (of_find_property(nc, prop, 0)) {
 		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
-			bi->getPixelCoords = rgbled_getPixelCoords_meander;
+			bi->get_pixel_coords =
+				rgbled_get_pixel_coords_meander;
 		else
 			goto parse_error;
 	}
@@ -132,7 +129,7 @@ static int rgbled_probe_of_panel(struct rgbled_fb *rfb,
 	}
 
 	/* finally brightness */
-	if (!of_property_read_u32_index(nc, "brightness",0, &tmp))
+	if (!of_property_read_u32_index(nc, "brightness", 0, &tmp))
 		bi->brightness = min_t(u32, tmp, 255);
 	else
 		bi->brightness = 255;
@@ -162,8 +159,8 @@ static int rgbled_probe_of_panel(struct rgbled_fb *rfb,
 
 parse_error:
 	fb_err(rfb->info,
-		"\"%s\" property not allowed in %s\n",
-		prop, bi->name);
+	       "\"%s\" property not allowed in %s\n",
+	       prop, bi->name);
 	return -EINVAL;
 }
 
@@ -176,9 +173,9 @@ int rgbled_scan_panels_match(struct rgbled_fb *rfb,
 	int idx;
 
 	/* get the compatible property */
-	for(i = 0 ; panels[i].compatible ; i++) {
+	for (i = 0 ; panels[i].compatible ; i++) {
 		idx = of_property_match_string(nc, "compatible",
-					panels[i].compatible);
+					       panels[i].compatible);
 		if (idx >= 0) {
 			return rgbled_probe_of_panel(rfb, nc,
 						     &panels[i]);
@@ -199,7 +196,7 @@ int rgbled_scan_panels_of(struct rgbled_fb *rfb,
 
 	/* iterate over all entries in the device-tree */
 	for_each_available_child_of_node(dev->of_node, nc) {
-		err = rgbled_scan_panels_match(rfb, nc, panels) ;
+		err = rgbled_scan_panels_match(rfb, nc, panels);
 		if (err) {
 			of_node_put(nc);
 			return err;
@@ -232,7 +229,7 @@ int rgbled_register_of(struct rgbled_fb *rfb)
 	of_property_read_u32_index(nc, "led-current-base",
 				   0, &rfb->led_current_base);
 
-	if (!of_property_read_u32_index(nc, "brightness",0, &tmp))
+	if (!of_property_read_u32_index(nc, "brightness", 0, &tmp))
 		rfb->brightness = min_t(u32, tmp, 255);
 	else
 		rfb->brightness = 255;

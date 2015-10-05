@@ -23,10 +23,6 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>
@@ -36,7 +32,6 @@
 #include "rgbled-fb.h"
 
 #define DEVICE_NAME "apa102-spi-fb"
-
 
 /* an encoded rgb-pixel */
 struct apa102_pixel {
@@ -105,13 +100,13 @@ struct rgbled_panel_info apa102_panels[] = {
 	{ }
 };
 
-static void apa102_setPixelValue(struct rgbled_fb *rfb,
-				struct rgbled_panel_info *panel,
-				int pixel_num,
-				struct rgbled_pixel *pix)
+static void apa102_set_pixel_value(struct rgbled_fb *rfb,
+				   struct rgbled_panel_info *panel,
+				   int pixel_num,
+				   struct rgbled_pixel *pix)
 {
-	struct apa102_data *bs=rfb->par;
-	struct apa102_pixel *spix = &bs->spi_data[pixel_num+1];
+	struct apa102_data *bs = rfb->par;
+	struct apa102_pixel *spix = &bs->spi_data[pixel_num + 1];
 
 	spix->brightness = 0xe0 | (pix->brightness >> 3);
 	spix->r = pix->red;
@@ -121,7 +116,7 @@ static void apa102_setPixelValue(struct rgbled_fb *rfb,
 
 static void apa102_finish_work(struct rgbled_fb *rfb)
 {
-	struct apa102_data *bs=rfb->par;
+	struct apa102_data *bs = rfb->par;
 
 	/* just issue spi_sync on the prepared spi message */
 	spi_sync(bs->spi, &bs->spi_msg);
@@ -162,7 +157,7 @@ static int apa102_probe(struct spi_device *spi)
 	spi_message_add_tail(&bs->spi_xfer, &bs->spi_msg);
 
 	/* setting up deferred work */
-	bs->rgbled_fb->setPixelValue = apa102_setPixelValue;
+	bs->rgbled_fb->set_pixel_value = apa102_set_pixel_value;
 	bs->rgbled_fb->finish_work = apa102_finish_work;
 	bs->rgbled_fb->par = bs;
 
@@ -179,12 +174,12 @@ static const struct of_device_id apa102_of_match[] = {
 MODULE_DEVICE_TABLE(of, apa102_of_match);
 
 static struct spi_driver apa102_driver = {
-        .driver = {
-                .name = DEVICE_NAME,
-                .owner = THIS_MODULE,
-                .of_match_table = apa102_of_match,
-        },
-        .probe = apa102_probe,
+	.driver = {
+		.name = DEVICE_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table = apa102_of_match,
+	},
+	.probe = apa102_probe,
 };
 module_spi_driver(apa102_driver);
 

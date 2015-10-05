@@ -23,10 +23,6 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>
@@ -57,12 +53,14 @@ const char byte2encoding_h[/* (value >> 5) & 0x07 */] = {
 	0xda,
 	0xdb
 };
+
 const char byte2encoding_m[/* (value >> 3) & 0x03 */] = {
 	0x49,
 	0x4d,
 	0x69,
 	0x6d
 };
+
 const char byte2encoding_l[/* value & 0x07 */] = {
 	0x24,
 	0x26,
@@ -86,7 +84,7 @@ struct ws2812b_pixel {
 /* generic information about this device */
 struct ws2812b_device_info {
 	char *name;
-	struct rgbled_panel_info* panels;
+	struct rgbled_panel_info *panels;
 	int clock_speed;
 	u32 led_current_max_red;
 	u32 led_current_max_green;
@@ -106,19 +104,20 @@ struct ws2812b_data {
 static const struct of_device_id ws2812b_of_match[];
 
 /* implementation details */
-static inline void ws2812b_setEncodedPixel(struct ws2812b_encoding *enc, u8 val)
+static inline void ws2812b_set_encoded_pixel(struct ws2812b_encoding *enc,
+					     u8 val)
 {
 	enc->h = byte2encoding_h[(val >> 5) & 0x07];
 	enc->m = byte2encoding_m[(val >> 3) & 0x03];
 	enc->l = byte2encoding_l[(val >> 0) & 0x07];
 }
 
-static void ws2812b_setPixelValue(struct rgbled_fb *rfb,
-				  struct rgbled_panel_info *panel,
-				  int pixel_num,
-				  struct rgbled_pixel *pix)
+static void ws2812b_set_pixel_value(struct rgbled_fb *rfb,
+				    struct rgbled_panel_info *panel,
+				    int pixel_num,
+				    struct rgbled_pixel *pix)
 {
-	struct ws2812b_data *bs=rfb->par;
+	struct ws2812b_data *bs = rfb->par;
 	struct ws2812b_pixel *spix = &bs->spi_data[pixel_num];
 
 	int r = pix->red   * pix->brightness / 255;
@@ -126,13 +125,14 @@ static void ws2812b_setPixelValue(struct rgbled_fb *rfb,
 	int b = pix->blue  * pix->brightness / 255;
 
 	/* assign the encoded values */
-	ws2812b_setEncodedPixel(&spix->g, g);
-	ws2812b_setEncodedPixel(&spix->r, r);
-	ws2812b_setEncodedPixel(&spix->b, b);
+	ws2812b_set_encoded_pixel(&spix->g, g);
+	ws2812b_set_encoded_pixel(&spix->r, r);
+	ws2812b_set_encoded_pixel(&spix->b, b);
 }
 
-static void ws2812b_finish_work(struct rgbled_fb *rfb) {
-	struct ws2812b_data *bs=rfb->par;
+static void ws2812b_finish_work(struct rgbled_fb *rfb)
+{
+	struct ws2812b_data *bs = rfb->par;
 
 	/* just issue spi_sync */
 	spi_sync(bs->spi, &bs->spi_msg);
@@ -144,7 +144,7 @@ static int ws2812b_probe(struct spi_device *spi)
 	int len;
 	const struct of_device_id *of_id;
 	const struct ws2812b_device_info *dinfo;
-	struct rgbled_fb* rfb;
+	struct rgbled_fb *rfb;
 
 	/* get the panels for this panel */
 	of_id = of_match_device(ws2812b_of_match, &spi->dev);
@@ -182,7 +182,7 @@ static int ws2812b_probe(struct spi_device *spi)
 				       HZ * len * 8 / spi->max_speed_hz);
 
 	/* setting up deferred work */
-	rfb->setPixelValue = ws2812b_setPixelValue;
+	rfb->set_pixel_value = ws2812b_set_pixel_value;
 	rfb->finish_work = ws2812b_finish_work;
 
 	/* copy the current values */
@@ -201,107 +201,107 @@ static int ws2812b_probe(struct spi_device *spi)
 /* define the different panel types for the ws2812b chip*/
 static struct rgbled_panel_info ws2812b_panels[] = {
 	{
-		.compatible	= "worldsemi,ws2812b,strip",
-		.width		= 1,
-		.height		= 1,
-		.flags		= RGBLED_FLAG_CHANGE_WHLP,
+		.compatible		= "worldsemi,ws2812b,strip",
+		.width			= 1,
+		.height			= 1,
+		.flags			= RGBLED_FLAG_CHANGE_WHLP,
 	},
 	{
-		.compatible	= "adafruit,neopixel,strip,30",
-		.width		= 1,
-		.height		= 1,
-		.pitch		= 30,
-		.flags		= RGBLED_FLAG_CHANGE_WHL,
+		.compatible		= "adafruit,neopixel,strip,30",
+		.width			= 1,
+		.height			= 1,
+		.pitch			= 30,
+		.flags			= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
-		.compatible	= "adafruit,neopixel,strip,60",
-		.width		= 1,
-		.height		= 1,
-		.pitch		= 60,
-		.flags		= RGBLED_FLAG_CHANGE_WHL,
+		.compatible		= "adafruit,neopixel,strip,60",
+		.width			= 1,
+		.height			= 1,
+		.pitch			= 60,
+		.flags			= RGBLED_FLAG_CHANGE_WHL,
 	},
 	{
-		.compatible	= "adafruit,neopixel,strip,144",
-		.width		= 1,
-		.height		= 1,
-		.pitch		= 144,
-		.flags		= RGBLED_FLAG_CHANGE_WHL,
+		.compatible		= "adafruit,neopixel,strip,144",
+		.width			= 1,
+		.height			= 1,
+		.pitch			= 144,
+		.flags			= RGBLED_FLAG_CHANGE_WHL,
 	},
 #ifdef VERIFIED_SETTINGS
 	{
-		.compatible	= "adafruit,neopixel,ring,12",
-		.pixel		= 12,
-		.width		= 6,
-		.height		= 6,
+		.compatible		= "adafruit,neopixel,ring,12",
+		.pixel			= 12,
+		.width			= 6,
+		.height			= 6,
 /*
-		.getPixelCoords	= ws2812b_getPixelCoordinates_ring12,
+		.get_pixel_coords	= ws2812b_get_pixel_coordinates_ring12,
 		.pitch			= 112,
 */
 
 	},
 	{
-		.compatible	= "adafruit,neopixel,ring,16",
-		.pixel		= 16,
-		.width		= 8,
-		.height		= 8,
+		.compatible		= "adafruit,neopixel,ring,16",
+		.pixel			= 16,
+		.width			= 8,
+		.height			= 8,
 /*
-		.getPixelCoords	= ws2812b_getPixelCoordinates_ring16,
-		.pitch		= 112,
+		.get_pixel_coords	= ws2812b_get_pixel_coordinates_ring16,
+		.pitch			= 112,
 */
 	},
 	{
-		.compatible	= "adafruit,neopixel,ring,24",
-		.pixel		= 24,
-		.width		= 10,
-		.height		= 10,
+		.compatible		= "adafruit,neopixel,ring,24",
+		.pixel			= 24,
+		.width			= 10,
+		.height			= 10,
 /*
-		.getPixelCoords	= ws2812b_getPixelCoordinates_ring24,
-		.pitch		= 112,
+		.get_pixel_coords	= ws2812b_get_pixel_coordinates_ring24,
+		.pitch			= 112,
 */
 	},
 	{
-		.compatible	= "adafruit,neopixel,arc,15",
-		.pixel		= 15,
-		.width		= 8,
-		.height		= 8,
+		.compatible		= "adafruit,neopixel,arc,15",
+		.pixel			= 15,
+		.width			= 8,
+		.height			= 8,
 /*
-		.getPixelCoords	= ws2812b_getPixelCoordinates_arc15,
+		.get_pixel_coords	= ws2812b_get_pixel_coordinates_arc15,
 		.pitch		= 112,
 */
 	},
 #endif
 	{
-		.compatible	= "adafruit,neopixel,matrix,8x8",
-		.width		= 8,
-		.height		= 8,
-		.getPixelCoords	= rgbled_getPixelCoords_meander,
-		.pitch		= 112,
-		.multiple	= rgbled_panel_multiple_height,
+		.compatible		= "adafruit,neopixel,matrix,8x8",
+		.width			= 8,
+		.height			= 8,
+		.get_pixel_coords	= rgbled_get_pixel_coords_meander,
+		.pitch			= 112,
+		.multiple		= rgbled_panel_multiple_height,
 	},
 	{
-		.compatible	= "adafruit,neopixel,matrix,16x16",
-		.width		= 16,
-		.height		= 16,
-		.getPixelCoords	= rgbled_getPixelCoords_meander,
-		.pitch		= 112,
-		.multiple	= rgbled_panel_multiple_height,
+		.compatible		= "adafruit,neopixel,matrix,16x16",
+		.width			= 16,
+		.height			= 16,
+		.get_pixel_coords	= rgbled_get_pixel_coords_meander,
+		.pitch			= 112,
+		.multiple		= rgbled_panel_multiple_height,
 	},
 	{
-		.compatible	= "adafruit,neopixel,matrix,32x8",
-		.width		= 32,
-		.height		= 8,
-		.pixel		= 256,
-		.getPixelCoords	= rgbled_getPixelCoords_meander,
-		.layout_yx	= true,
-		.pitch		= 112,
-		.multiple	= rgbled_panel_multiple_width,
+		.compatible		= "adafruit,neopixel,matrix,32x8",
+		.width			= 32,
+		.height			= 8,
+		.pixel			= 256,
+		.get_pixel_coords	= rgbled_get_pixel_coords_meander,
+		.layout_yx		= true,
+		.pitch			= 112,
+		.multiple		= rgbled_panel_multiple_width,
 	},
 	{
-		.compatible	= "adafruit,neopixel,stick,8",
-		.width		= 8,
-		.height		= 1,
-		.pitch		= 156,
-		.multiple	= rgbled_panel_multiple_height,
+		.compatible		= "adafruit,neopixel,stick,8",
+		.width			= 8,
+		.height			= 1,
+		.pitch			= 156,
+		.multiple		= rgbled_panel_multiple_height,
 	},
 	{ }
 };
@@ -319,9 +319,10 @@ static struct ws2812b_device_info ws2812b_device_info = {
 /* define the different panel types for the ws2812b chip*/
 static struct rgbled_panel_info ws2812_panels[] = {
 	{
-		.compatible	= "worldsemi,ws2812,strip",
-		.width		= 1,
-		.height		= 1,
+		.compatible		= "worldsemi,ws2812,strip",
+		.width			= 1,
+		.height			= 1,
+		.flags			= RGBLED_FLAG_CHANGE_WHLP,
 	},
 	{ }
 };
@@ -351,12 +352,12 @@ static const struct of_device_id ws2812b_of_match[] = {
 MODULE_DEVICE_TABLE(of, ws2812b_of_match);
 
 static struct spi_driver ws2812b_driver = {
-        .driver = {
-                .name = DEVICE_NAME,
-                .owner = THIS_MODULE,
-                .of_match_table = ws2812b_of_match,
-        },
-        .probe = ws2812b_probe,
+	.driver = {
+		.name = DEVICE_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table = ws2812b_of_match,
+	},
+	.probe = ws2812b_probe,
 };
 module_spi_driver(ws2812b_driver);
 

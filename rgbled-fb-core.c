@@ -14,10 +14,6 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/device.h>
@@ -68,10 +64,10 @@ static struct fb_var_screeninfo fb_var_screeninfo_default = {
 };
 
 static void rgbled_deferred_io(struct fb_info *fb,
-			struct list_head *pagelist);
+			       struct list_head *pagelist);
 
 static struct fb_deferred_io fb_deferred_io_default = {
-	/* .delay		= HZ/10, */
+	/* .delay		= HZ / 100, */
 	.deferred_io	= rgbled_deferred_io,
 };
 
@@ -81,31 +77,31 @@ static ssize_t rgbled_write(struct fb_info *info,
 			    const char __user *buf, size_t count,
 			    loff_t *ppos)
 {
-        ssize_t res = fb_sys_write(info, buf, count, ppos);
+	ssize_t res = fb_sys_write(info, buf, count, ppos);
 
 	rgbled_schedule(info);
 
-        return res;
+	return res;
 }
 
 static void rgbled_fillrect(struct fb_info *info,
-				const struct fb_fillrect *rect)
+			    const struct fb_fillrect *rect)
 {
-        sys_fillrect(info, rect);
+	sys_fillrect(info, rect);
 	rgbled_schedule(info);
 }
 
 static void rgbled_copyarea(struct fb_info *info,
 			    const struct fb_copyarea *area)
 {
-        sys_copyarea(info, area);
+	sys_copyarea(info, area);
 	rgbled_schedule(info);
 }
 
 static void rgbled_imageblit(struct fb_info *info,
 			     const struct fb_image *image)
 {
-        sys_imageblit(info, image);
+	sys_imageblit(info, image);
 	rgbled_schedule(info);
 }
 
@@ -117,7 +113,7 @@ static struct fb_ops rgbled_ops = {
 	.fb_imageblit	= rgbled_imageblit,
 };
 
-void rgbled_getPixelCoords_generic(
+void rgbled_get_pixel_coords_generic(
 	struct rgbled_fb *rfb,
 	struct rgbled_panel_info *panel,
 	int panel_pixel_num,
@@ -144,26 +140,26 @@ void rgbled_getPixelCoords_generic(
 	coord->y = y;
 }
 
-void rgbled_getPixelCoords_linear(
+void rgbled_get_pixel_coords_linear(
 	struct rgbled_fb *rfb,
 	struct rgbled_panel_info *panel,
 	int panel_pixel_num,
 	struct rgbled_coordinates *coord)
 {
-	rgbled_getPixelCoords_generic(rfb, panel, panel_pixel_num, coord);
+	rgbled_get_pixel_coords_generic(rfb, panel, panel_pixel_num, coord);
 
 	coord->x += panel->x;
 	coord->y += panel->y;
 }
-EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_linear);
+EXPORT_SYMBOL_GPL(rgbled_get_pixel_coords_linear);
 
-void rgbled_getPixelCoords_meander(
+void rgbled_get_pixel_coords_meander(
 	struct rgbled_fb *rfb,
 	struct rgbled_panel_info *panel,
 	int panel_pixel_num,
 	struct rgbled_coordinates *coord)
 {
-	rgbled_getPixelCoords_generic(rfb, panel, panel_pixel_num, coord);
+	rgbled_get_pixel_coords_generic(rfb, panel, panel_pixel_num, coord);
 
 	/* handle layout */
 	if (panel->layout_yx) {
@@ -178,12 +174,12 @@ void rgbled_getPixelCoords_meander(
 	coord->x += panel->x;
 	coord->y += panel->y;
 }
-EXPORT_SYMBOL_GPL(rgbled_getPixelCoords_meander);
+EXPORT_SYMBOL_GPL(rgbled_get_pixel_coords_meander);
 
-static inline void rgbled_getPixelValue_set(struct rgbled_fb *rfb,
-					    struct rgbled_panel_info *panel,
-					    struct rgbled_pixel *pix,
-					    u8 r, u8 g, u8 b, u8 bright)
+static inline void rgbled_get_pixel_value_set(struct rgbled_fb *rfb,
+					      struct rgbled_panel_info *panel,
+					      struct rgbled_pixel *pix,
+					      u8 r, u8 g, u8 b, u8 bright)
 {
 	pix->red = r;
 	pix->green = g;
@@ -194,25 +190,26 @@ static inline void rgbled_getPixelValue_set(struct rgbled_fb *rfb,
 		255 / 255;
 }
 
-static void rgbled_getPixelValue_default(struct rgbled_fb *rfb,
-					 struct rgbled_panel_info *panel,
-					 struct rgbled_coordinates *coord,
-					 struct rgbled_pixel *pix)
+static void rgbled_get_pixel_value_default(struct rgbled_fb *rfb,
+					   struct rgbled_panel_info *panel,
+					   struct rgbled_coordinates *coord,
+					   struct rgbled_pixel *pix)
 {
 	struct rgbled_pixel *vpix;
 
 	if (coord->x > rfb->width)
-		return 	rgbled_getPixelValue_set(rfb, panel, pix, 0, 0, 0, 0);
+		return rgbled_get_pixel_value_set(rfb, panel, pix,
+						  0, 0, 0, 0);
 	if (coord->y > rfb->height)
-		return 	rgbled_getPixelValue_set(rfb, panel, pix, 0, 0, 0, 0);
+		return rgbled_get_pixel_value_set(rfb, panel, pix,
+						  0, 0, 0, 0);
 
 	/* copy pixel data */
-	vpix = rgbled_getFBPixel(rfb, coord);
+	vpix = rgbled_get_raw_pixel(rfb, coord);
 
-	rgbled_getPixelValue_set(rfb, panel, pix,
-				 vpix->red, vpix->green, vpix->blue,
-				 vpix->brightness);
-
+	rgbled_get_pixel_value_set(rfb, panel, pix,
+				   vpix->red, vpix->green, vpix->blue,
+				   vpix->brightness);
 }
 
 static u8 rgbled_handle_panel(struct rgbled_fb *rfb,
@@ -225,16 +222,16 @@ static u8 rgbled_handle_panel(struct rgbled_fb *rfb,
 	u64 c = 0; /* current - need 64bit temporarily because of scaling */
 
 	/* iterate over all pixel */
-	for(i=0; i< panel->pixel; i++) {
+	for (i = 0; i < panel->pixel; i++) {
 		/* get the coordinates */
-		rgbled_getPixelCoords(rfb, panel, i, &coord);
+		rgbled_get_pixel_coords(rfb, panel, i, &coord);
 		/* now get the corresponding value */
-		rgbled_getPixelValue(rfb, panel, &coord, &pix);
+		rgbled_get_pixel_value(rfb, panel, &coord, &pix);
 
 		/* here we could add gamma control if needed */
 
 		/* and set it */
-		rfb->setPixelValue(rfb, panel, start_pixel + i, &pix);
+		rfb->set_pixel_value(rfb, panel, start_pixel + i, &pix);
 
 		/* and calculate current estimate */
 		c += pix.red   * pix.brightness * rfb->led_current_max_red;
@@ -287,9 +284,8 @@ static u8 rgbled_handle_panels(struct rgbled_fb *rfb)
 	/* check current */
 	if (!rfb->current_limit)
 		return 255;
-	if (rfb->current_limit >= rfb->current_tmp) {
+	if (rfb->current_limit >= rfb->current_tmp)
 		return 255;
-	}
 
 	fb_warn(rfb->info,
 		"total panel consumes %i mA and exceeded current limit of %i mA\n",
@@ -326,7 +322,7 @@ static void rgbled_deferred_work_default(struct rgbled_fb *rfb)
 	u8 rescale = rgbled_handle_panels(rfb);
 
 	/* rescale the global brightness */
-	while(rescale < 255) {
+	while (rescale < 255) {
 		/* change brightness */
 		rfb->brightness = rfb->brightness * rescale / 255;
 		/* and rerun the calculation */
@@ -349,7 +345,7 @@ static void rgbled_deferred_work_default(struct rgbled_fb *rfb)
 }
 
 static void rgbled_deferred_io(struct fb_info *fb,
-			struct list_head *pagelist)
+			       struct list_head *pagelist)
 {
 	struct rgbled_fb *rfb = fb->par;
 
@@ -364,8 +360,8 @@ static inline struct rgbled_panel_info *to_panel_info(
 }
 
 static int rgbled_panel_info_cmp(void *priv,
-			   struct list_head *a,
-			   struct list_head *b)
+				 struct list_head *a,
+				 struct list_head *b)
 {
 	struct rgbled_fb *rfb = priv;
 	struct rgbled_panel_info *ad = to_panel_info(a);
@@ -374,10 +370,11 @@ static int rgbled_panel_info_cmp(void *priv,
 	if (ad->id < bd->id)
 		return -1;
 	if (ad->id > bd->id)
-		return +1;
+		return 1;
 
 	/* there should be no identical IDs, so mark as duplicates */
 	rfb->duplicate_id = 1;
+
 	return 0;
 }
 
@@ -443,6 +440,7 @@ static void rgbled_unregister_framebuffer(struct device *dev, void *res)
 static void rgbled_framebuffer_release(struct device *dev, void *res)
 {
 	struct rgbled_fb *rfb = *(struct rgbled_fb **)res;
+
 	framebuffer_release(rfb->info);
 	rfb->info = NULL;
 }
@@ -512,24 +510,26 @@ static int rgbled_fix_up_structures(struct rgbled_fb *rfb)
 	if (!rfb->deferred_work) {
 		rfb->deferred_work = rgbled_deferred_work_default;
 		/* if there is no custom implementation,
-		 * then we need setPixelValue
+		 * then we need set_pixel_value
 		 * finish_work is optional...
 		 */
-		if (!rfb->setPixelValue) {
-			fb_err(rfb->info, "no setPixelValue method configured\n");
+		if (!rfb->set_pixel_value) {
+			fb_err(rfb->info,
+			       "no set_pixel_value method configured\n");
 			return -EINVAL;
 		}
 	}
 
 	/* fill in those empty vectors with defaults */
-	if (!rfb->getPixelValue)
-		rfb->getPixelValue = rgbled_getPixelValue_default;
+	if (!rfb->get_pixel_value)
+		rfb->get_pixel_value = rgbled_get_pixel_value_default;
 
+	/* and the panels */
 	list_for_each_entry(p, &rfb->panels, list) {
-		if (!p->getPixelCoords)
-			p->getPixelCoords = rgbled_getPixelCoords_linear;
-		if (!p->getPixelValue)
-			p->getPixelValue = rfb->getPixelValue;
+		if (!p->get_pixel_coords)
+			p->get_pixel_coords = rgbled_get_pixel_coords_linear;
+		if (!p->get_pixel_value)
+			p->get_pixel_value = rfb->get_pixel_value;
 	}
 
 	return 0;
@@ -559,8 +559,10 @@ int rgbled_register(struct rgbled_fb *rfb)
 	*ptr = rfb;
 
 	/* set up sizes */
-	fb->var.xres_virtual = fb->var.xres = rfb->width;
-	fb->var.yres_virtual = fb->var.yres = rfb->height;
+	fb->var.xres_virtual = rfb->width;
+	fb->var.yres_virtual = rfb->height;
+	fb->var.xres = rfb->width;
+	fb->var.yres = rfb->height;
 
 	fb->fix.line_length = sizeof(struct rgbled_pixel) * rfb->width;
 	rfb->vmem_size = fb->fix.line_length * rfb->height;
@@ -573,15 +575,11 @@ int rgbled_register(struct rgbled_fb *rfb)
 	}
 
 	/* set vmem data */
-        fb->fix.smem_len = rfb->vmem_size;
+	fb->fix.smem_len = rfb->vmem_size;
 	fb->screen_size = rfb->vmem_size;
 
 	fb->screen_base = (typeof(fb->screen_base))rfb->vmem;
 	fb->fix.smem_start = (typeof(fb->fix.smem_start))rfb->vmem;
-
-	/* calculate refresh rate to use */
-	if (!rfb->deferred_io.delay)
-		rfb->deferred_io.delay = HZ/100;
 
 	/* initialize deferred io as a devm device */
 	fb_deferred_io_init(fb);
@@ -603,6 +601,10 @@ int rgbled_register(struct rgbled_fb *rfb)
 
 	/* and register panels */
 	rgbled_register_panels(rfb);
+
+	/* calculate refresh rate to use */
+	if (!rfb->deferred_io.delay)
+		rfb->deferred_io.delay = HZ / 100;
 
 	/* and start an initial update of the framebuffer to clean it */
 	rfb->deferred_work(rfb);

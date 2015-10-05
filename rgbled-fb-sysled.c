@@ -15,10 +15,6 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/device.h>
@@ -48,7 +44,7 @@ static int rgbled_register_sysfs_panels(struct rgbled_fb *rfb)
 		val = rfb->field;					\
 		spin_unlock(&rfb->lock);				\
 									\
-		return sprintf(buf, "%i\n",val);			\
+		return sprintf(buf, "%i\n", val);			\
 	}
 
 #define SYSFS_HELPER_STORE(name, field, max)				\
@@ -58,11 +54,12 @@ static int rgbled_register_sysfs_panels(struct rgbled_fb *rfb)
 	{								\
 		struct fb_info *fb = dev_get_drvdata(dev);		\
 		struct rgbled_fb *rfb = fb->par;			\
-		char *end;						\
-		u32 val = simple_strtoul(buf, &end, 0);			\
+		int err;						\
+		u32 val;						\
 									\
-		if (end == buf)						\
-			return -EINVAL;					\
+		err = kstrtou32(buf, 0, &val);				\
+		if (err)						\
+			return err;					\
 		if (val > max)						\
 			return -EINVAL;					\
 									\
@@ -77,12 +74,12 @@ static int rgbled_register_sysfs_panels(struct rgbled_fb *rfb)
 	}
 
 #define SYSFS_HELPER_RO(name, field)					\
-	SYSFS_HELPER_SHOW(name, field);					\
+	SYSFS_HELPER_SHOW(name, field)					\
 	static DEVICE_ATTR_RO(name)
 
 #define SYSFS_HELPER_RW(name, field, maxv)				\
-	SYSFS_HELPER_SHOW(name, field);					\
-	SYSFS_HELPER_STORE(name, field, maxv);				\
+	SYSFS_HELPER_SHOW(name, field)					\
+	SYSFS_HELPER_STORE(name, field, maxv)				\
 	static DEVICE_ATTR_RW(name)
 
 /* this is unfortunately needed - otherwise "current" is expanded by cpp */
@@ -175,8 +172,8 @@ static void rgbled_brightness_set(struct led_classdev *led_cdev,
 	case rgbled_pixeltype_red:
 	case rgbled_pixeltype_green:
 	case rgbled_pixeltype_blue:
-		if(!led->pixel->brightness)
-			led->pixel->brightness= 255;
+		if (!led->pixel->brightness)
+			led->pixel->brightness = 255;
 		break;
 	case rgbled_pixeltype_brightness:
 		/* if the rgb values are off, so set to white */
@@ -223,7 +220,7 @@ static int rgbled_register_single_led(struct rgbled_fb *rfb,
 	int err;
 
 	/* get the pixel */
-	vpix = rgbled_getFBPixel(rfb, coord);
+	vpix = rgbled_get_raw_pixel(rfb, coord);
 	if (!vpix)
 		return -EINVAL;
 
@@ -262,7 +259,7 @@ static int rgbled_register_panel_led_single(struct rgbled_fb *rfb,
 					    struct rgbled_panel_info *panel,
 					    struct device_node *nc)
 {
-	struct fb_info * fb = rfb->info;
+	struct fb_info *fb = rfb->info;
 	struct rgbled_coordinates coord;
 	const char *label = NULL;
 	const char *trigger = NULL;
@@ -270,9 +267,10 @@ static int rgbled_register_panel_led_single(struct rgbled_fb *rfb,
 	enum rgbled_pixeltype channel;
 	u32 pix;
 	int len;
-	struct property *prop = of_find_property(nc, "reg", &len);
+	struct property *prop;
 
-	/* if no property then return */
+	/* if no property reg then return */
+	prop = of_find_property(nc, "reg", &len);
 	if (!prop) {
 		fb_err(fb, "missing reg property in %s\n", nc->name);
 		return -EINVAL;
@@ -282,20 +280,19 @@ static int rgbled_register_panel_led_single(struct rgbled_fb *rfb,
 		fb_err(fb, "missing channel property in %s\n", nc->name);
 		return -EINVAL;
 	}
-	if (strcmp(channel_str, "red") == 0)
+	if (strcmp(channel_str, "red") == 0) {
 		channel = rgbled_pixeltype_red;
-	else if (strcmp(channel_str, "green") == 0)
+	} else if (strcmp(channel_str, "green") == 0) {
 		channel = rgbled_pixeltype_green;
-	else if (strcmp(channel_str, "blue") == 0)
+	} else if (strcmp(channel_str, "blue") == 0) {
 		channel = rgbled_pixeltype_blue;
-	else if (strcmp(channel_str, "brightness") == 0)
+	} else if (strcmp(channel_str, "brightness") == 0) {
 		channel = rgbled_pixeltype_brightness;
-	else {
+	} else {
 		fb_err(fb, "wrong channel property value %s in %s\n",
 		       channel_str, nc->name);
 		return -EINVAL;
 	}
-
 
 	/* check for 1d/2d */
 	switch (len) {
@@ -304,16 +301,12 @@ static int rgbled_register_panel_led_single(struct rgbled_fb *rfb,
 		of_property_read_u32_index(nc, "reg", 0, &pix);
 		if (pix >= panel->pixel) {
 			fb_err(fb, "reg value %i is out of range in %s\n",
-				pix, nc->name);
+			       pix, nc->name);
 			return -EINVAL;
 		}
 		/* translate coordinates */
-		if (panel->getPixelCoords)
-			panel->getPixelCoords(rfb, panel,
-						pix, &coord);
-		else
-			rgbled_getPixelCoords_linear(rfb,panel,
-						     pix, &coord);
+		rgbled_get_pixel_coords(rfb, panel, pix, &coord);
+
 		break;
 	case 2: /* need to handle the 2d case */
 	default:
@@ -321,14 +314,12 @@ static int rgbled_register_panel_led_single(struct rgbled_fb *rfb,
 		       "unexpected number of arguments in reg(%i) in %s\n",
 			len, nc->name);
 		return -EINVAL;
-		break;
 	}
 	/* now we got the coordinates, so run the rest */
 
 	/* define the label */
-	if (of_property_read_string(nc, "label", &label)) {
+	if (of_property_read_string(nc, "label", &label))
 		label = nc->name;
-	}
 	if (!label)
 		return -EINVAL;
 
@@ -348,20 +339,16 @@ static int rgbled_register_panel_led_all(struct rgbled_fb *rfb,
 	char label[32];
 	struct rgbled_coordinates coord;
 
-	for(i=0; i < panel->pixel; i++) {
+	for (i = 0; i < panel->pixel; i++) {
 		/* translate coordinates */
-		if (panel->getPixelCoords)
-			panel->getPixelCoords(rfb, panel,
-					i, &coord);
-		else
-			rgbled_getPixelCoords_linear(rfb,panel,
-						     i, &coord);
+		rgbled_get_pixel_coords(rfb, panel, i, &coord);
+
 		/* now register the individual led components */
 		snprintf(label, sizeof(label), "%s:%i:%i:red",
 			 rfb->name, coord.x, coord.y);
 		err = rgbled_register_single_led(rfb, panel, label, &coord,
 						 rgbled_pixeltype_red,
-					         NULL);
+						 NULL);
 		if (err)
 			return err;
 

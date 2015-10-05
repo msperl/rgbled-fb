@@ -14,10 +14,6 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #ifndef __RGBLED_FB_H
@@ -116,7 +112,7 @@ struct rgbled_fb {
 	struct fb_deferred_io	deferred_io;
 
 	struct list_head	panels;
-	spinlock_t		lock;
+	spinlock_t		lock; /* spinlock for this framebuffer */
 	void			*par;
 	const char		*name;
 	struct device_node	*of_node;
@@ -129,17 +125,16 @@ struct rgbled_fb {
 
 	int			pixel;
 
-	void (*deferred_work)(struct rgbled_fb*);
-	void (*getPixelValue)(struct rgbled_fb *rfb,
-			      struct rgbled_panel_info *panel,
-			      struct rgbled_coordinates *coord,
-			      struct rgbled_pixel *pix);
-	void (*setPixelValue)(struct rgbled_fb *rfb,
-			      struct rgbled_panel_info *panel,
-			      int pixel_num,
-			      struct rgbled_pixel *pix);
-	void (*finish_work)(struct rgbled_fb*);
-
+	void (*deferred_work)(struct rgbled_fb *rfb);
+	void (*get_pixel_value)(struct rgbled_fb *rfb,
+				struct rgbled_panel_info *panel,
+				struct rgbled_coordinates *coord,
+				struct rgbled_pixel *pix);
+	void (*set_pixel_value)(struct rgbled_fb *rfb,
+				struct rgbled_panel_info *panel,
+				int pixel_num,
+				struct rgbled_pixel *pix);
+	void (*finish_work)(struct rgbled_fb *rfb);
 
 	/* current estimates in mA */
 	u32			current_limit;
@@ -197,10 +192,10 @@ struct rgbled_fb {
  * @of_node: reference to the device_node that initialized this panel
  */
 struct rgbled_panel_info {
-	struct list_head 	list;
+	struct list_head	list;
 	u32			id;
 
-	const char     		*compatible;
+	const char		*compatible;
 	const char		*name;
 
 	u32			x;
@@ -221,22 +216,22 @@ struct rgbled_panel_info {
 #define RGBLED_FLAG_CHANGE_HEIGHT	BIT(1)
 #define RGBLED_FLAG_CHANGE_PITCH	BIT(2)
 #define RGBLED_FLAG_CHANGE_LAYOUT	BIT(3)
-#define RGBLED_FLAG_CHANGE_WHL  	(RGBLED_FLAG_CHANGE_WIDTH |  \
+#define RGBLED_FLAG_CHANGE_WHL		(RGBLED_FLAG_CHANGE_WIDTH |  \
 					 RGBLED_FLAG_CHANGE_HEIGHT | \
 					 RGBLED_FLAG_CHANGE_LAYOUT)
-#define RGBLED_FLAG_CHANGE_WHLP  	(RGBLED_FLAG_CHANGE_WHL |    \
+#define RGBLED_FLAG_CHANGE_WHLP		(RGBLED_FLAG_CHANGE_WHL |    \
 					 RGBLED_FLAG_CHANGE_PITCH)
 
 	int (*multiple)(struct rgbled_panel_info *panel, u32 val);
 
-	void (*getPixelCoords)(struct rgbled_fb *rfb,
-			       struct rgbled_panel_info *panel,
-			       int pixel_num,
-			       struct rgbled_coordinates *coord);
-	void (*getPixelValue)(struct rgbled_fb *rfb,
-			      struct rgbled_panel_info *panel,
-			      struct rgbled_coordinates * coord,
-			      struct rgbled_pixel *pix);
+	void (*get_pixel_coords)(struct rgbled_fb *rfb,
+				 struct rgbled_panel_info *panel,
+				 int pixel_num,
+				 struct rgbled_coordinates *coord);
+	void (*get_pixel_value)(struct rgbled_fb *rfb,
+				struct rgbled_panel_info *panel,
+				struct rgbled_coordinates *coord,
+				struct rgbled_pixel *pix);
 
 	/* current estimates */
 	u32			current_limit;
@@ -253,70 +248,71 @@ struct rgbled_panel_info {
 /* default implementations for multiple where we have extend the panel
  * by another in sequence horizontally/vertically
 */
-extern int rgbled_panel_multiple_width(struct rgbled_panel_info *panel, u32 val);
-extern int rgbled_panel_multiple_height(struct rgbled_panel_info *panel, u32 val);
+int rgbled_panel_multiple_width(struct rgbled_panel_info *panel,
+				u32 val);
+int rgbled_panel_multiple_height(struct rgbled_panel_info *panel,
+				 u32 val);
 
-static inline void rgbled_getPixelValue(struct rgbled_fb *rfb,
-					struct rgbled_panel_info *panel,
-					struct rgbled_coordinates *coord,
-					struct rgbled_pixel *pix)
+static inline void rgbled_get_pixel_value(struct rgbled_fb *rfb,
+					  struct rgbled_panel_info *panel,
+					  struct rgbled_coordinates *coord,
+					  struct rgbled_pixel *pix)
 {
-	return panel->getPixelValue(rfb, panel, coord, pix);
+	return panel->get_pixel_value(rfb, panel, coord, pix);
 }
 
-static inline struct rgbled_pixel *rgbled_getFBPixel(
+static inline struct rgbled_pixel *rgbled_get_raw_pixel(
 	struct rgbled_fb *rfb,
 	struct rgbled_coordinates *coord)
 {
 	return &rfb->vmem[coord->y * rfb->width + coord->x];
 }
 
-static inline void rgbled_getPixelCoords(struct rgbled_fb *rfb,
-					 struct rgbled_panel_info *panel,
-					 int panel_pixel_num,
-					 struct rgbled_coordinates *coord)
+static inline void rgbled_get_pixel_coords(struct rgbled_fb *rfb,
+					   struct rgbled_panel_info *panel,
+					   int panel_pixel_num,
+					   struct rgbled_coordinates *coord)
 {
-	panel->getPixelCoords(rfb, panel, panel_pixel_num, coord);
+	panel->get_pixel_coords(rfb, panel, panel_pixel_num, coord);
 }
 
 /* typical pixel coordinate implementation for standard types */
-extern void rgbled_getPixelCoords_linear(
-		struct rgbled_fb *rfb,
-		struct rgbled_panel_info *panel,
-		int pixel_num,
-		struct rgbled_coordinates *coord);
+void rgbled_get_pixel_coords_linear(struct rgbled_fb *rfb,
+				    struct rgbled_panel_info *panel,
+				    int pixel_num,
+				    struct rgbled_coordinates *coord);
 
-/* every other row is inverted - depending on layout_yx */
-extern void rgbled_getPixelCoords_meander(
-		struct rgbled_fb *rfb,
-		struct rgbled_panel_info *panel,
-		int pixel_num,
-		struct rgbled_coordinates *coord);
+/* every other row is inverted - x or y, depending on layout_yx */
+void rgbled_get_pixel_coords_meander(struct rgbled_fb *rfb,
+				     struct rgbled_panel_info *panel,
+				     int pixel_num,
+				     struct rgbled_coordinates *coord);
 
 /* allocation of the rgbled_framebuffer
  * making use of devres to release the allocated resources
  */
-extern struct rgbled_fb *rgbled_alloc(struct device *dev,
-				      const char *name,
-				      struct rgbled_panel_info *panels);
+struct rgbled_fb *rgbled_alloc(struct device *dev,
+			       const char *name,
+			       struct rgbled_panel_info *panels);
 /* finally register the rgbled_framebuffer */
-extern int rgbled_register(struct rgbled_fb *fb);
+int rgbled_register(struct rgbled_fb *fb);
 
 /* scheduling a screen update for the framebuffer */
 static inline void rgbled_schedule(struct fb_info *info)
 {
-        schedule_delayed_work(&info->deferred_work, 1);
+	schedule_delayed_work(&info->deferred_work, 1);
 }
 
 /* internal functions used in several c-files - not exported */
 
 /* register all panels that are defined in the devicetree */
-extern int rgbled_register_of(struct rgbled_fb *rfb);
-extern int rgbled_scan_panels_of(struct rgbled_fb *rfb,
-				 struct rgbled_panel_info *panels);
+int rgbled_register_of(struct rgbled_fb *rfb);
+int rgbled_scan_panels_of(struct rgbled_fb *rfb,
+			  struct rgbled_panel_info *panels);
 /* register the rgbled_fb in sysfs */
-extern int rgbled_register_sysfs(struct rgbled_fb *rfb);
+int rgbled_register_sysfs(struct rgbled_fb *rfb);
+
 /* register the individual panels */
-extern int rgbled_register_panels(struct rgbled_fb *rfb);
+int rgbled_register_panels(struct rgbled_fb *rfb);
 
 #endif /* __RGBLED_FB_H */
