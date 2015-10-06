@@ -22,67 +22,65 @@
 #include <linux/leds.h>
 #include <linux/list.h>
 #include <linux/module.h>
+#include <linux/of.h>
 
 #include "rgbled-fb.h"
 
 static int rgbled_probe_of_panel(struct rgbled_fb *rfb,
 				 struct device_node *nc,
-				 struct rgbled_panel_info *panel)
+				 struct rgbled_panel_info *template)
 {
 	struct device *dev = rfb->info->device;
-	struct rgbled_panel_info *bi;
+	struct rgbled_panel_info *panel;
 	u32 tmp;
 	char *prop;
 	int err;
 
-	bi = devm_kzalloc(dev, sizeof(*bi), GFP_KERNEL);
-	if (!bi)
+	panel = devm_kzalloc(dev, sizeof(*panel), GFP_KERNEL);
+	if (!panel)
 		return -ENOMEM;
 
 	/* copy the default panel data */
-	memcpy(bi, panel, sizeof(*bi));
-
-	/* add to list */
-	list_add(&bi->list, &rfb->panels);
+	memcpy(panel, template, sizeof(*panel));
 
 	/* copy the full name (including @...) */
-	bi->name = nc->kobj.name;
+	panel->name = nc->kobj.name;
 
 	/* and set device node reference */
-	bi->of_node = nc;
+	panel->of_node = nc;
 
 	/* now fill in from the device tree the overrides */
-	if (of_property_read_u32_index(nc, "reg",    0, &bi->id))
+	if (of_property_read_u32_index(nc, "reg",    0, &panel->id))
 		return -EINVAL;
 
 	/* basic layout stuff */
-	of_property_read_u32_index(nc, "x",      0, &bi->x);
-	of_property_read_u32_index(nc, "y",      0, &bi->y);
+	of_property_read_u32_index(nc, "x",      0, &panel->x);
+	of_property_read_u32_index(nc, "y",      0, &panel->y);
 	prop = "layout-y-x";
 	if (of_find_property(nc, prop, 0)) {
-		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
-			bi->layout_yx = true;
+		if (panel->flags & RGBLED_FLAG_CHANGE_LAYOUT)
+			panel->layout_yx = true;
 		else
 			goto parse_error;
 	}
 	prop = "inverted-x";
 	if (of_find_property(nc, prop, 0)) {
-		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
-			bi->inverted_x = true;
+		if (panel->flags & RGBLED_FLAG_CHANGE_LAYOUT)
+			panel->inverted_x = true;
 		else
 			goto parse_error;
 	}
 	prop = "inverted-y";
 	if (of_find_property(nc, prop, 0)) {
-		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
-			bi->inverted_y = true;
+		if (panel->flags & RGBLED_FLAG_CHANGE_LAYOUT)
+			panel->inverted_y = true;
 		else
 			goto parse_error;
 	}
 	prop = "meander";
 	if (of_find_property(nc, prop, 0)) {
-		if (bi->flags & RGBLED_FLAG_CHANGE_LAYOUT)
-			bi->get_pixel_coords =
+		if (panel->flags & RGBLED_FLAG_CHANGE_LAYOUT)
+			panel->get_pixel_coords =
 				rgbled_get_pixel_coords_meander;
 		else
 			goto parse_error;
@@ -90,37 +88,37 @@ static int rgbled_probe_of_panel(struct rgbled_fb *rfb,
 
 	prop = "width";
 	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
-		if (bi->flags & RGBLED_FLAG_CHANGE_WIDTH)
-			bi->width = tmp;
+		if (panel->flags & RGBLED_FLAG_CHANGE_WIDTH)
+			panel->width = tmp;
 		else
 			goto parse_error;
 	}
 	prop = "height";
 	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
-		if (bi->flags & RGBLED_FLAG_CHANGE_HEIGHT)
-			bi->height = tmp;
+		if (panel->flags & RGBLED_FLAG_CHANGE_HEIGHT)
+			panel->height = tmp;
 		else
 			goto parse_error;
 	}
 	prop = "pitch";
 	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
-		if (bi->flags & RGBLED_FLAG_CHANGE_PITCH)
-			bi->pitch = tmp;
+		if (panel->flags & RGBLED_FLAG_CHANGE_PITCH)
+			panel->pitch = tmp;
 		else
 			goto parse_error;
 	}
 	prop = "current-limit";
 	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
-		if (bi->current_limit)
-			bi->current_limit = min(tmp, bi->current_limit);
+		if (panel->current_limit)
+			panel->current_limit = min(tmp, panel->current_limit);
 		else
-			bi->current_limit = tmp;
+			panel->current_limit = tmp;
 	}
 	/* multiple towards the end */
 	prop = "multiple";
 	if (!of_property_read_u32_index(nc, prop,  0, &tmp)) {
-		if (bi->multiple) {
-			err = bi->multiple(bi, tmp);
+		if (panel->multiple) {
+			err = panel->multiple(panel, tmp);
 			if (err)
 				return err;
 		} else {
@@ -130,37 +128,21 @@ static int rgbled_probe_of_panel(struct rgbled_fb *rfb,
 
 	/* finally brightness */
 	if (!of_property_read_u32_index(nc, "brightness", 0, &tmp))
-		bi->brightness = min_t(u32, tmp, 255);
+		panel->brightness = min_t(u32, tmp, 255);
 	else
-		bi->brightness = 255;
+		panel->brightness = 255;
 
-	/* calculate size of panel in pixel if not set */
-	if (!bi->pixel)
-		bi->pixel = bi->width * bi->height;
+	/* expose alll leds via sysfs */
+	if (of_find_property(nc, "linux,expose-all-led", NULL))
+		panel->expose_all_led = true;
 
-	/* check values */
-	if (!bi->width)
-		return -EINVAL;
-	if (!bi->height)
-		return -EINVAL;
-	if (!bi->pixel)
-		return -EINVAL;
-
-	/* add the number of pixel to the chain */
-	rfb->pixel += bi->pixel;
-
-	/* setting max coordinates for the framebuffer */
-	if (rfb->width < bi->x + bi->width)
-		rfb->width = bi->x + bi->width;
-	if (rfb->height < bi->x + bi->height)
-		rfb->height = bi->y + bi->height;
-
-	return 0;
+	/* register Device */
+	return rgbled_register_panel(rfb, panel);
 
 parse_error:
 	fb_err(rfb->info,
 	       "\"%s\" property not allowed in %s\n",
-	       prop, bi->name);
+	       prop, panel->name);
 	return -EINVAL;
 }
 
@@ -234,5 +216,109 @@ int rgbled_register_of(struct rgbled_fb *rfb)
 	else
 		rfb->brightness = 255;
 
+	/* trigger the exposure of all leds */
+	if (of_find_property(nc, "linux,expose-all-led", NULL))
+		rfb->expose_all_led = true;
+
 	return 0;
 }
+
+static int rgbled_register_panel_single_sysled(
+	struct rgbled_fb *rfb,
+	struct rgbled_panel_info *panel,
+	struct device_node *nc)
+{
+	struct fb_info *fb = rfb->info;
+	struct rgbled_coordinates coord;
+	const char *label = NULL;
+	const char *trigger = NULL;
+	const char *channel_str;
+	enum rgbled_pixeltype channel;
+	u32 pix;
+	int len;
+	struct property *prop;
+
+	/* if no property reg then return */
+	prop = of_find_property(nc, "reg", &len);
+	if (!prop) {
+		fb_err(fb, "missing reg property in %s\n", nc->name);
+		return -EINVAL;
+	}
+	/* channel */
+	if (!of_property_read_string(nc, "channel", &channel_str)) {
+		fb_err(fb, "missing channel property in %s\n", nc->name);
+		return -EINVAL;
+	}
+	if (strcmp(channel_str, "red") == 0) {
+		channel = rgbled_pixeltype_red;
+	} else if (strcmp(channel_str, "green") == 0) {
+		channel = rgbled_pixeltype_green;
+	} else if (strcmp(channel_str, "blue") == 0) {
+		channel = rgbled_pixeltype_blue;
+	} else if (strcmp(channel_str, "brightness") == 0) {
+		channel = rgbled_pixeltype_brightness;
+	} else {
+		fb_err(fb, "wrong channel property value %s in %s\n",
+		       channel_str, nc->name);
+		return -EINVAL;
+	}
+
+	/* check for 1d/2d */
+	switch (len) {
+	case 1: /* 1d approach */
+		/* no error checking needed */
+		of_property_read_u32_index(nc, "reg", 0, &pix);
+		if (pix >= panel->pixel) {
+			fb_err(fb, "reg value %i is out of range in %s\n",
+			       pix, nc->name);
+			return -EINVAL;
+		}
+		/* translate coordinates */
+		rgbled_get_pixel_coords(rfb, panel, pix, &coord);
+
+		break;
+	case 2: /* need to handle the 2d case */
+	default:
+		fb_err(fb,
+		       "unexpected number of arguments in reg(%i) in %s\n",
+			len, nc->name);
+		return -EINVAL;
+	}
+	/* now we got the coordinates, so run the rest */
+
+	/* define the label */
+	if (of_property_read_string(nc, "label", &label))
+		label = nc->name;
+	if (!label)
+		return -EINVAL;
+
+	/* read the trigger */
+	of_property_read_string(nc, "linux,default-trigger", &trigger);
+
+	/* and now register it for real */
+	return rgbled_register_single_sysled(rfb, panel,
+					     label, &coord,
+					     channel, trigger);
+}
+
+#if 0
+static int rgbled_register_panel_sysled_of(struct rgbled_fb *rfb,
+					   struct rgbled_panel_info *panel)
+{
+	struct device_node *bnc = panel->of_node;
+	struct device_node *nc;
+	int err;
+
+	/* iterate all given sub */
+	for_each_available_child_of_node(bnc, nc) {
+		err = rgbled_register_panel_single_sysled(rfb, panel, nc);
+		if (err) {
+			of_node_put(nc);
+			return err;
+		}
+	}
+
+	return 0;
+}
+
+#endif

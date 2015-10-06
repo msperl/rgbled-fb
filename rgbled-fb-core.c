@@ -19,6 +19,7 @@
 #include <linux/device.h>
 #include <linux/fb.h>
 #include <linux/kernel.h>
+#include <linux/kobject.h>
 #include <linux/leds.h>
 #include <linux/list.h>
 #include <linux/list_sort.h>
@@ -27,6 +28,348 @@
 #include <linux/vmalloc.h>
 
 #include "rgbled-fb.h"
+
+/* exposure of component data in sysfs */
+#if 0
+#define SYSFS_PANEL_HELPER_SHOW(name, field)				\
+	static ssize_t panel_ ## name ## _show(struct device *dev,	\
+				struct device_attribute *a,		\
+				char *buf)				\
+	{								\
+		struct fb_info *fb = dev_get_drvdata(dev);		\
+		struct rgbled_fb *rfb = fb->par;			\
+		u32 val;						\
+									\
+		spin_lock(&rfb->lock);					\
+		val = rfb->field;					\
+		spin_unlock(&rfb->lock);				\
+									\
+		return sprintf(buf, "%i\n", val);			\
+	}
+#define SYSFS_PANEL_HELPER_RO(name, field)				\
+	SYSFS_PANEL_HELPER_SHOW(name, field)				\
+	static struct panel_##name## DEVICE_ATTR_RO(name)
+
+#undef current
+SYSFS_HELPER_RO(current, current_active);
+SYSFS_HELPER_RO(current_max, current_max);
+
+struct attribute *panel_attrs[]={
+	NULL,
+};
+
+struct kobj_type panel_ktype = {
+	.default_attrs =  panel_attrs,
+};
+#endif
+static int rgbled_register_sysfs_panels(struct rgbled_fb *rfb)
+{
+#if 0
+	struct fb_info *fb = rfb->info;
+	struct rgbled_panel_info *panel;
+	int err;
+
+	/* iterate over all panels */
+	list_for_each_entry(panel, &rfb->panels, list) {
+		/* init and register kobject */
+		printk(KERN_ERR "Register : %s\n", panel->name);
+		err = kobject_init_and_add(&panel->kobj,
+					   &panel_ktype,
+					   &fb->dev->kobj,
+					   panel->name);
+		if (err)
+			return err;
+	}
+#endif
+	return 0;
+}
+
+#define SYSFS_HELPER_SHOW(name, field)					\
+	static ssize_t name ## _show(struct device *dev,		\
+				struct device_attribute *a,		\
+				char *buf)				\
+	{								\
+		struct fb_info *fb = dev_get_drvdata(dev);		\
+		struct rgbled_fb *rfb = fb->par;			\
+		u32 val;						\
+									\
+		spin_lock(&rfb->lock);					\
+		val = rfb->field;					\
+		spin_unlock(&rfb->lock);				\
+									\
+		return sprintf(buf, "%i\n", val);			\
+	}
+
+#define SYSFS_HELPER_STORE(name, field, max)				\
+	static ssize_t name ## _store(struct device *dev,		\
+				struct device_attribute *a,		\
+				const char *buf, size_t count)		\
+	{								\
+		struct fb_info *fb = dev_get_drvdata(dev);		\
+		struct rgbled_fb *rfb = fb->par;			\
+		int err;						\
+		u32 val;						\
+									\
+		err = kstrtou32(buf, 0, &val);				\
+		if (err)						\
+			return err;					\
+		if (val > max)						\
+			return -EINVAL;					\
+									\
+		spin_lock(&rfb->lock);					\
+		rfb->field = val;					\
+		rfb->current_max = 0;					\
+		spin_unlock(&rfb->lock);				\
+									\
+		rgbled_schedule(fb);					\
+									\
+		return count;						\
+	}
+
+#define SYSFS_HELPER_RO(name, field)					\
+	SYSFS_HELPER_SHOW(name, field)					\
+	static DEVICE_ATTR_RO(name)
+
+#define SYSFS_HELPER_RW(name, field, maxv)				\
+	SYSFS_HELPER_SHOW(name, field)					\
+	SYSFS_HELPER_STORE(name, field, maxv)				\
+	static DEVICE_ATTR_RW(name)
+
+/* this is unfortunately needed - otherwise "current" is expanded by cpp */
+#undef current
+
+SYSFS_HELPER_RW(brightness, brightness, 255);
+SYSFS_HELPER_RO(current, current_active);
+SYSFS_HELPER_RO(current_max, current_max);
+SYSFS_HELPER_RW(current_limit, current_limit, 100000000);
+SYSFS_HELPER_RW(led_current_max_red, led_current_max_red, 10000);
+SYSFS_HELPER_RW(led_current_max_green, led_current_max_green, 10000);
+SYSFS_HELPER_RW(led_current_max_blue, led_current_max_blue, 10000);
+SYSFS_HELPER_RW(led_current_base, led_current_base, 10000);
+SYSFS_HELPER_RO(led_count, pixel);
+SYSFS_HELPER_RO(updates, screen_updates);
+
+static struct device_attribute *device_attrs[] = {
+	&dev_attr_brightness,
+	&dev_attr_current,
+	&dev_attr_current_max,
+	&dev_attr_current_limit,
+	&dev_attr_led_current_max_red,
+	&dev_attr_led_current_max_green,
+	&dev_attr_led_current_max_blue,
+	&dev_attr_led_current_base,
+	&dev_attr_led_count,
+	&dev_attr_updates,
+};
+
+int rgbled_register_sysfs(struct rgbled_fb *rfb)
+{
+	struct fb_info *fb = rfb->info;
+	int i;
+	int err = 0;
+
+	/* register panels */
+	err = rgbled_register_sysfs_panels(rfb);
+	if (err)
+		return err;
+
+	/* register all device_attributes */
+	for (i = 0; i < ARRAY_SIZE(device_attrs); i++) {
+		/* create the file */
+		err = device_create_file(fb->dev, device_attrs[i]);
+		if (err)
+			break;
+	}
+
+	if (err) {
+		while (--i >= 0)
+			device_remove_file(fb->dev, device_attrs[i]);
+	}
+
+	return err;
+}
+
+/* sysled support */
+struct rgbled_led_data {
+	struct led_classdev cdev;
+	struct rgbled_fb *rfb;
+	struct rgbled_pixel *pixel;
+	enum rgbled_pixeltype type;
+};
+
+static void rgbled_unregister_single_led(struct device *dev, void *res)
+{
+	struct rgbled_led_data *led = res;
+
+	led_classdev_unregister(&led->cdev);
+}
+
+static void rgbled_brightness_set(struct led_classdev *led_cdev,
+				  enum led_brightness brightness)
+{
+	struct rgbled_led_data *led = container_of(led_cdev,
+						   typeof(*led), cdev);
+	/* set the value itself */
+	switch (led->type) {
+	case rgbled_pixeltype_red:
+		led->pixel->red = brightness; break;
+	case rgbled_pixeltype_green:
+		led->pixel->green = brightness; break;
+	case rgbled_pixeltype_blue:
+		led->pixel->blue = brightness; break;
+	case rgbled_pixeltype_brightness:
+		led->pixel->brightness = brightness;
+		break;
+	}
+	/* modifications to make things visible if nothing is set */
+	switch (led->type) {
+	case rgbled_pixeltype_red:
+	case rgbled_pixeltype_green:
+	case rgbled_pixeltype_blue:
+		if (!led->pixel->brightness)
+			led->pixel->brightness = 255;
+		break;
+	case rgbled_pixeltype_brightness:
+		/* if the rgb values are off, so set to white */
+		if ((!led->pixel->red) &&
+		    (!led->pixel->green) &&
+		    (!led->pixel->blue)) {
+			led->pixel->red = 255;
+			led->pixel->green = 255;
+			led->pixel->blue = 255;
+		}
+		break;
+	}
+
+	rgbled_schedule(led->rfb->info);
+}
+
+static enum led_brightness rgbled_brightness_get(struct led_classdev *led_cdev)
+{
+	struct rgbled_led_data *led = container_of(led_cdev,
+						   typeof(*led), cdev);
+	switch (led->type) {
+	case rgbled_pixeltype_red:
+		return led->pixel->red;
+	case rgbled_pixeltype_green:
+		return led->pixel->green;
+	case rgbled_pixeltype_blue:
+		return led->pixel->blue;
+	case rgbled_pixeltype_brightness:
+		return led->pixel->brightness;
+	}
+
+	return 0;
+}
+
+static int rgbled_register_single_led(struct rgbled_fb *rfb,
+				      struct rgbled_panel_info *panel,
+				      const char *label,
+				      struct rgbled_coordinates *coord,
+				      enum rgbled_pixeltype type,
+				      const char *trigger)
+{
+	struct rgbled_led_data *led;
+	struct rgbled_pixel *vpix;
+	int err;
+
+	/* get the pixel */
+	vpix = rgbled_get_raw_pixel(rfb, coord);
+	if (!vpix)
+		return -EINVAL;
+
+	/* get a new led instance */
+	led = devres_alloc(rgbled_unregister_single_led,
+			   sizeof(*led), GFP_KERNEL);
+	if (!led)
+		return -ENOMEM;
+
+	led->rfb = rfb;
+
+	led->cdev.name = devm_kstrdup(rfb->info->dev, label, GFP_KERNEL);
+	led->cdev.max_brightness = 255;
+
+	led->cdev.brightness_set = rgbled_brightness_set;
+	led->cdev.brightness_get = rgbled_brightness_get;
+
+	led->cdev.default_trigger = trigger;
+	led->pixel = vpix;
+	led->type = type;
+
+	/* register the led */
+	err = led_classdev_register(rfb->info->dev, &led->cdev);
+	if (err) {
+		devres_free(led);
+		return err;
+	}
+
+	/* add the resource to get removed */
+	devres_add(rfb->info->device, led);
+
+	return 0;
+}
+
+static int rgbled_register_panel_led_all(struct rgbled_fb *rfb,
+					 struct rgbled_panel_info *panel)
+{
+	int i, err;
+	char label[32];
+	struct rgbled_coordinates coord;
+
+	for (i = 0; i < panel->pixel; i++) {
+		/* translate coordinates */
+		rgbled_get_pixel_coords(rfb, panel, i, &coord);
+
+		/* now register the individual led components */
+		snprintf(label, sizeof(label), "%s:%i:%i:red",
+			 rfb->name, coord.x, coord.y);
+		err = rgbled_register_single_led(rfb, panel, label, &coord,
+						 rgbled_pixeltype_red,
+						 NULL);
+		if (err)
+			return err;
+
+		snprintf(label, sizeof(label), "%s:%i:%i:green",
+			 rfb->name, coord.x, coord.y);
+		err = rgbled_register_single_led(rfb, panel, label, &coord,
+						 rgbled_pixeltype_green,
+						 NULL);
+		if (err)
+			return err;
+
+		snprintf(label, sizeof(label), "%s:%i:%i:blue",
+			 rfb->name, coord.x, coord.y);
+		err = rgbled_register_single_led(rfb, panel, label, &coord,
+						 rgbled_pixeltype_blue,
+						 NULL);
+		if (err)
+			return err;
+
+		snprintf(label, sizeof(label), "%s:%i:%i:brightness",
+			 rfb->name, coord.x, coord.y);
+		err = rgbled_register_single_led(rfb, panel, label, &coord,
+						 rgbled_pixeltype_brightness,
+						 NULL);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+int rgbled_register_panel_sysled(struct rgbled_fb *rfb,
+				 struct rgbled_panel_info *panel)
+{
+	int err = 0;
+
+	/* TODO: expose specific leds with custom settings */
+
+	/* expose all leds via led-api if requested */
+	if (rfb->expose_all_led || panel->expose_all_led)
+		err = rgbled_register_panel_led_all(rfb, panel);
+
+	return err;
+}
 
 /* all the comented out are to get filled in */
 static struct fb_fix_screeninfo fb_fix_screeninfo_default = {
@@ -396,6 +739,37 @@ int rgbled_panel_multiple_height(struct rgbled_panel_info *panel, u32 val)
 }
 EXPORT_SYMBOL_GPL(rgbled_panel_multiple_height);
 
+int rgbled_register_panel(struct rgbled_fb *rfb,
+			  struct rgbled_panel_info *panel)
+{
+	/* add to list */
+	list_add(&panel->list, &rfb->panels);
+
+	/* calculate size of panel in pixel if not set */
+	if (!panel->pixel)
+		panel->pixel = panel->width * panel->height;
+
+	/* check values */
+	if (!panel->width)
+		return -EINVAL;
+	if (!panel->height)
+		return -EINVAL;
+	if (!panel->pixel)
+		return -EINVAL;
+
+	/* add the number of pixel to the chain */
+	rfb->pixel += panel->pixel;
+
+	/* setting max coordinates for the framebuffer */
+	if (rfb->width < panel->x + panel->width)
+		rfb->width = panel->x + panel->width;
+	if (rfb->height < panel->x + panel->height)
+		rfb->height = panel->y + panel->height;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rgbled_register_panel);
+
 int rgbled_scan_panels(struct rgbled_fb *rfb,
 		       struct rgbled_panel_info *panels)
 {
@@ -535,6 +909,21 @@ static int rgbled_fix_up_structures(struct rgbled_fb *rfb)
 	return 0;
 }
 
+int rgbled_register_panels_sysled(struct rgbled_fb *rfb)
+{
+	struct rgbled_panel_info *panel;
+	int err;
+
+	/* register each  led in each panel - if given */
+	list_for_each_entry(panel, &rfb->panels, list) {
+		err = rgbled_register_panel_sysled(rfb, panel);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 int rgbled_register(struct rgbled_fb *rfb)
 {
 	struct fb_info *fb = rfb->info;
@@ -599,8 +988,10 @@ int rgbled_register(struct rgbled_fb *rfb)
 	if (err)
 		return err;
 
-	/* and register panels */
-	rgbled_register_panels(rfb);
+	/* and register panel leds */
+	err = rgbled_register_panels_sysled(rfb);
+	if (err)
+		return err;
 
 	/* calculate refresh rate to use */
 	if (!rfb->deferred_io.delay)

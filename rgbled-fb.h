@@ -33,7 +33,7 @@
  * @brighness: global brightness (encoded as alpha in fb)
  *
  * the reason for separate brightness is to allow the
- * support of AP102 devices which have separate
+ * support of AP102 devices which have separate:
  *   24bit RGB PWM settings
  *    4bit brightness constant current settings
  */
@@ -84,6 +84,7 @@ struct rgbled_panel_info;
  * @width: framebuffer width
  * @height: framebuffer height
  * @pixel: pixel string length
+ * @expose_all_led: expose all led in all panels via sysfs using led api
  * @deferred_work: the deferred work function - typically default
  * @getPixelValue: get the corresponding pixelvalue of for the specific
  *                 panel coordinates
@@ -124,6 +125,8 @@ struct rgbled_fb {
 	int			vmem_size;
 
 	int			pixel;
+
+	bool			expose_all_led;
 
 	void (*deferred_work)(struct rgbled_fb *rfb);
 	void (*get_pixel_value)(struct rgbled_fb *rfb,
@@ -189,9 +192,12 @@ struct rgbled_fb {
  * @current_tmp: temporary current estimation prior to updating the screen
  * @current_max: max estimated current usage by the framebuffer
  * @brightness: control the brightness of this specific panel
+ * @expose_all_led: expose all led via sysfs using led api
  * @of_node: reference to the device_node that initialized this panel
  */
 struct rgbled_panel_info {
+	struct kobject		kobj;
+
 	struct list_head	list;
 	u32			id;
 
@@ -241,6 +247,9 @@ struct rgbled_panel_info {
 
 	/* the default brightness */
 	u8			brightness;
+
+	/* expose all led also via sysfs */
+	bool			expose_all_led;
 
 	struct device_node	*of_node;
 };
@@ -294,6 +303,10 @@ void rgbled_get_pixel_coords_meander(struct rgbled_fb *rfb,
 struct rgbled_fb *rgbled_alloc(struct device *dev,
 			       const char *name,
 			       struct rgbled_panel_info *panels);
+/* register a led-panel/strip */
+int rgbled_register_panel(struct rgbled_fb *rfb,
+			  struct rgbled_panel_info *panel);
+
 /* finally register the rgbled_framebuffer */
 int rgbled_register(struct rgbled_fb *fb);
 
@@ -309,10 +322,17 @@ static inline void rgbled_schedule(struct fb_info *info)
 int rgbled_register_of(struct rgbled_fb *rfb);
 int rgbled_scan_panels_of(struct rgbled_fb *rfb,
 			  struct rgbled_panel_info *panels);
-/* register the rgbled_fb in sysfs */
-int rgbled_register_sysfs(struct rgbled_fb *rfb);
 
-/* register the individual panels */
-int rgbled_register_panels(struct rgbled_fb *rfb);
+/* register the individual panels leds */
+int rgbled_register_panel_sysled(struct rgbled_fb *rfb,
+				 struct rgbled_panel_info *panel);
+
+int rgbled_register_single_sysled(struct rgbled_fb *rfb,
+				struct rgbled_panel_info *panel,
+				const char *label,
+				struct rgbled_coordinates *coord,
+				enum rgbled_pixeltype type,
+				const char *trigger);
+
 
 #endif /* __RGBLED_FB_H */

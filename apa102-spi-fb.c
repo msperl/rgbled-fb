@@ -27,6 +27,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of_device.h>
 #include <linux/spi/spi.h>
 
 #include "rgbled-fb.h"
@@ -38,6 +39,17 @@ struct apa102_pixel {
 	u8 brightness, b, g, r;
 };
 
+/* generic information about this device */
+struct apa102_device_info {
+	char *name;
+	struct rgbled_panel_info *panels;
+	u32 led_current_max_red;
+	u32 led_current_max_green;
+	u32 led_current_max_blue;
+	u32 led_current_base;
+};
+
+/* the private data structure for this device */
 struct apa102_data {
 	struct spi_device *spi;
 	struct rgbled_fb *rgbled_fb;
@@ -45,6 +57,8 @@ struct apa102_data {
 	struct spi_message spi_msg;
 	struct spi_transfer spi_xfer;
 };
+
+static const struct of_device_id apa102_of_match[];
 
 /* define the different FB types */
 struct rgbled_panel_info apa102_panels[] = {
@@ -100,6 +114,15 @@ struct rgbled_panel_info apa102_panels[] = {
 	{ }
 };
 
+static struct apa102_device_info apa102_device_info = {
+	.name			= "apa102-spi-fb",
+	.panels			= apa102_panels,
+	.led_current_max_red	= 19,
+	.led_current_max_green	= 14,
+	.led_current_max_blue	= 15,
+	.led_current_base	= 1,
+};
+
 static void apa102_set_pixel_value(struct rgbled_fb *rfb,
 				   struct rgbled_panel_info *panel,
 				   int pixel_num,
@@ -126,12 +149,23 @@ static int apa102_probe(struct spi_device *spi)
 {
 	struct apa102_data *bs;
 	int len;
+	const struct of_device_id *of_id;
+	const struct apa102_device_info *dinfo;
+	struct rgbled_fb *rfb;
 
+	/* get the panels for this panel */
+	of_id = of_match_device(apa102_of_match, &spi->dev);
+	if (!of_id)
+		return -EINVAL;
+	dinfo = (const struct apa102_device_info *)of_id->data;
+
+	/* allocate our buffer */
 	bs = devm_kzalloc(&spi->dev, sizeof(*bs), GFP_KERNEL);
 	if (!bs)
 		return -ENOMEM;
 
-	bs->rgbled_fb = rgbled_alloc(&spi->dev, DEVICE_NAME, apa102_panels);
+	rfb = rgbled_alloc(&spi->dev, DEVICE_NAME, apa102_panels);
+	bs->rgbled_fb = rfb;
 	if (!bs->rgbled_fb)
 		return -ENOMEM;
 	if (IS_ERR(bs->rgbled_fb))
@@ -150,16 +184,29 @@ static int apa102_probe(struct spi_device *spi)
 	memset(&bs->spi_data[bs->rgbled_fb->pixel + 1],
 	       255, bs->rgbled_fb->pixel / 8 + 1);
 
+	/* setting up SPI */
 	bs->spi = spi;
 	spi_message_init(&bs->spi_msg);
 	bs->spi_xfer.len = len;
 	bs->spi_xfer.tx_buf = bs->spi_data;
 	spi_message_add_tail(&bs->spi_xfer, &bs->spi_msg);
 
+	/* and estimate the refresh rate */
+	rfb->deferred_io.delay = max_t(unsigned long, 1,
+				       HZ * len * 8 / spi->max_speed_hz);
+
 	/* setting up deferred work */
 	bs->rgbled_fb->set_pixel_value = apa102_set_pixel_value;
 	bs->rgbled_fb->finish_work = apa102_finish_work;
-	bs->rgbled_fb->par = bs;
+
+	/* copy the current values */
+	rfb->led_current_max_red = dinfo->led_current_max_red;
+	rfb->led_current_max_green = dinfo->led_current_max_green;
+	rfb->led_current_max_blue = dinfo->led_current_max_blue;
+	rfb->led_current_base = dinfo->led_current_base;
+
+	/* set the reverse pointer */
+	rfb->par = bs;
 
 	/* and register */
 	return rgbled_register(bs->rgbled_fb);
@@ -168,6 +215,7 @@ static int apa102_probe(struct spi_device *spi)
 static const struct of_device_id apa102_of_match[] = {
 	{
 		.compatible	= "shiji-led,apa102",
+		.data		= &apa102_device_info,
 	},
 	{ }
 };

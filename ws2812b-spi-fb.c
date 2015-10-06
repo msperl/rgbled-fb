@@ -171,6 +171,7 @@ static int ws2812b_probe(struct spi_device *spi)
 	if (!bs->spi_data)
 		return -ENOMEM;
 
+	/* setting up SPI */
 	bs->spi = spi;
 	spi_message_init(&bs->spi_msg);
 	bs->spi_xfer.len = len;
